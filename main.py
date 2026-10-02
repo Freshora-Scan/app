@@ -1,5 +1,10 @@
+# ============================================================
+# FRESHORA - FOOD FRESHNESS SCANNER
+# ============================================================
+
 import os
 
+# Your original imports — KEEPING ALL OF THEM
 import kivy
 import openai
 import tensorflow as tf
@@ -9,6 +14,7 @@ import pandas as pd
 import sklearn
 import matplotlib.pyplot as plt
 
+# Kivy imports
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
@@ -16,16 +22,14 @@ from kivy.uix.button import Button
 from kivy.uix.image import Image as KivyImage
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.popup import Popup
-from kivy.uix.progressbar import ProgressBar
 
 
 # ============================================================
-# FRESHORA
+# 1. PROJECT SETTINGS
 # ============================================================
 
 PROJECT_NAME = "Freshora"
 
-DATASET_PATH = "data/banana"
 MODEL_PATH = "model/freshora_model.keras"
 
 IMG_SIZE = (224, 224)
@@ -39,76 +43,117 @@ CLASS_NAMES = [
 
 
 # ============================================================
-# AI MODEL
+# 2. LOAD TRAINED MODEL
 # ============================================================
 
 model = None
 
 
-def load_model():
+def load_freshora_model():
 
     global model
 
     if not os.path.exists(MODEL_PATH):
+
+        print(
+            "No trained model found."
+        )
+
+        print(
+            "Train the model using:"
+        )
+
+        print(
+            "py -3.12 model/train.py"
+        )
+
         return False
 
     try:
+
         model = tf.keras.models.load_model(
             MODEL_PATH
+        )
+
+        print(
+            "Freshora model loaded successfully."
         )
 
         return True
 
     except Exception as error:
 
-        print("Model loading failed:")
+        print(
+            "Could not load model:"
+        )
+
         print(error)
 
         return False
 
 
-def predict_image(image_path):
+# ============================================================
+# 3. IMAGE PREDICTION
+# ============================================================
+
+def predict_freshness(image_path):
 
     if model is None:
 
         return None, 0.0
 
-    image = Image.open(
-        image_path
-    ).convert("RGB")
+    try:
 
-    image = image.resize(
-        IMG_SIZE
-    )
+        image = Image.open(
+            image_path
+        ).convert("RGB")
 
-    image_array = np.array(
-        image,
-        dtype=np.float32
-    )
+        image = image.resize(
+            IMG_SIZE
+        )
 
-    image_array = np.expand_dims(
-        image_array,
-        axis=0
-    )
+        image_array = np.array(
+            image,
+            dtype=np.float32
+        )
 
-    predictions = model.predict(
-        image_array,
-        verbose=0
-    )[0]
+        image_array = np.expand_dims(
+            image_array,
+            axis=0
+        )
 
-    index = int(
-        np.argmax(predictions)
-    )
+        predictions = model.predict(
+            image_array,
+            verbose=0
+        )[0]
 
-    confidence = float(
-        predictions[index] * 100
-    )
+        prediction_index = int(
+            np.argmax(predictions)
+        )
 
-    return CLASS_NAMES[index], confidence
+        prediction = CLASS_NAMES[
+            prediction_index
+        ]
+
+        confidence = float(
+            predictions[prediction_index]
+        )
+
+        return prediction, confidence
+
+    except Exception as error:
+
+        print(
+            "Prediction error:"
+        )
+
+        print(error)
+
+        return None, 0.0
 
 
 # ============================================================
-# MAIN KIVY UI
+# 4. FRESHORA USER INTERFACE
 # ============================================================
 
 class FreshoraLayout(BoxLayout):
@@ -124,6 +169,10 @@ class FreshoraLayout(BoxLayout):
 
         self.selected_image = None
 
+        # ----------------------------------------------------
+        # TITLE
+        # ----------------------------------------------------
+
         self.title = Label(
             text="[b]FRESHORA[/b]",
             markup=True,
@@ -136,14 +185,24 @@ class FreshoraLayout(BoxLayout):
             self.title
         )
 
+        # ----------------------------------------------------
+        # STATUS
+        # ----------------------------------------------------
+
         self.status = Label(
             text="Food Freshness AI",
-            font_size=18
+            font_size=18,
+            size_hint_y=None,
+            height=40
         )
 
         self.add_widget(
             self.status
         )
+
+        # ----------------------------------------------------
+        # IMAGE PREVIEW
+        # ----------------------------------------------------
 
         self.preview = KivyImage(
             allow_stretch=True,
@@ -153,6 +212,10 @@ class FreshoraLayout(BoxLayout):
         self.add_widget(
             self.preview
         )
+
+        # ----------------------------------------------------
+        # SELECT BUTTON
+        # ----------------------------------------------------
 
         self.select_button = Button(
             text="Select Food Image",
@@ -168,6 +231,10 @@ class FreshoraLayout(BoxLayout):
             self.select_button
         )
 
+        # ----------------------------------------------------
+        # ANALYZE BUTTON
+        # ----------------------------------------------------
+
         self.scan_button = Button(
             text="Analyze Freshness",
             size_hint_y=None,
@@ -182,6 +249,10 @@ class FreshoraLayout(BoxLayout):
             self.scan_button
         )
 
+        # ----------------------------------------------------
+        # RESULT
+        # ----------------------------------------------------
+
         self.result = Label(
             text="No image selected.",
             font_size=20
@@ -191,17 +262,25 @@ class FreshoraLayout(BoxLayout):
             self.result
         )
 
+        # ----------------------------------------------------
+        # DISCLAIMER
+        # ----------------------------------------------------
+
         self.disclaimer = Label(
             text=(
-                "AI predictions are not a guarantee of food safety.\n"
-                "Check food using appropriate food-safety guidance."
+                "AI predictions are not a guarantee "
+                "of food safety.\n"
+                "Use appropriate food-safety guidance."
             ),
-            font_size=12
+            font_size=12,
+            size_hint_y=None,
+            height=50
         )
 
         self.add_widget(
             self.disclaimer
         )
+
 
     # ========================================================
     # FILE PICKER
@@ -226,14 +305,14 @@ class FreshoraLayout(BoxLayout):
             chooser
         )
 
-        select_button = Button(
-            text="Use Image",
+        choose_button = Button(
+            text="Use Selected Image",
             size_hint_y=None,
             height=50
         )
 
         popup_layout.add_widget(
-            select_button
+            choose_button
         )
 
         popup = Popup(
@@ -242,9 +321,11 @@ class FreshoraLayout(BoxLayout):
             size_hint=(0.9, 0.9)
         )
 
+
         def select_image(instance):
 
             if not chooser.selection:
+
                 return
 
             self.selected_image = (
@@ -267,11 +348,13 @@ class FreshoraLayout(BoxLayout):
 
             popup.dismiss()
 
-        select_button.bind(
+
+        choose_button.bind(
             on_press=select_image
         )
 
         popup.open()
+
 
     # ========================================================
     # ANALYZE IMAGE
@@ -287,40 +370,59 @@ class FreshoraLayout(BoxLayout):
 
             return
 
+
+        if model is None:
+
+            self.result.text = (
+                "AI model not available yet.\n"
+                "Train the model first."
+            )
+
+            return
+
+
         self.status.text = (
             "Analyzing..."
         )
 
+
         prediction, confidence = (
-            predict_image(
+            predict_freshness(
                 self.selected_image
             )
         )
 
+
         if prediction is None:
 
             self.status.text = (
-                "Model not available"
+                "Analysis failed."
             )
 
             self.result.text = (
-                "Train the Freshora model first."
+                "Could not analyze this image."
             )
 
             return
+
 
         self.status.text = (
             "Analysis complete"
         )
 
+
         self.result.text = (
+
             f"Prediction: {prediction}\n"
-            f"Confidence: {confidence:.2f}%"
+
+            f"Confidence: "
+            f"{confidence * 100:.2f}%"
+
         )
 
 
 # ============================================================
-# KIVY APP
+# 5. FRESHORA APP
 # ============================================================
 
 class FreshoraApp(App):
@@ -329,20 +431,16 @@ class FreshoraApp(App):
 
         self.title = PROJECT_NAME
 
-        model_loaded = load_model()
-
-        print(
-            "Freshora model loaded:",
-            model_loaded
-        )
+        load_freshora_model()
 
         return FreshoraLayout()
 
 
 # ============================================================
-# START APPLICATION
+# 6. START APP
 # ============================================================
 
 if __name__ == "__main__":
 
     FreshoraApp().run()
+```

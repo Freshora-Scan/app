@@ -1,4 +1,5 @@
 import kivy
+import openai
 import tensorflow as tf
 from PIL import Image
 import numpy as np

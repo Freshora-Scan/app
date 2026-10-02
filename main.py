@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 # 2. PROJECT INFORMATION
 # ============================================================
 
-PROJECT_NAME = "Freshora"
+PROJECT_NAME = "Food Freshness AI"
 
 print("\n===================================")
 print(PROJECT_NAME)

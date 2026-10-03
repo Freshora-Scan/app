@@ -31,9 +31,13 @@ from kivy.uix.popup import Popup
 PROJECT_NAME = "Freshora"
 
 MODEL_PATH = "model/freshora_model.keras"
+CLASS_NAMES_PATH = "model/class_names.txt"
 
 IMG_SIZE = (224, 224)
 
+# Fallback class order for the current banana prototype.
+# train.py should create class_names.txt with the actual
+# class ordering used during training.
 CLASS_NAMES = [
     "unripe",
     "ripe",
@@ -43,7 +47,76 @@ CLASS_NAMES = [
 
 
 # ============================================================
-# 2. LOAD TRAINED MODEL
+# 2. LOAD CLASS NAMES
+# ============================================================
+
+def load_class_names():
+
+    if not os.path.exists(CLASS_NAMES_PATH):
+
+        print(
+            "class_names.txt not found."
+        )
+
+        print(
+            "Using default banana class order."
+        )
+
+        return CLASS_NAMES.copy()
+
+    try:
+
+        with open(
+            CLASS_NAMES_PATH,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            names = [
+                line.strip()
+                for line in file
+                if line.strip()
+            ]
+
+        if not names:
+
+            print(
+                "class_names.txt is empty."
+            )
+
+            print(
+                "Using default banana class order."
+            )
+
+            return CLASS_NAMES.copy()
+
+        print(
+            "Class names loaded successfully."
+        )
+
+        print(
+            names
+        )
+
+        return names
+
+    except Exception as error:
+
+        print(
+            "Could not load class names:"
+        )
+
+        print(error)
+
+        print(
+            "Using default banana class order."
+        )
+
+        return CLASS_NAMES.copy()
+
+
+# ============================================================
+# 3. LOAD TRAINED MODEL
 # ============================================================
 
 model = None
@@ -64,7 +137,7 @@ def load_freshora_model():
         )
 
         print(
-            "py -3.12 model/train.py"
+            "py -3.12 model\\train.py"
         )
 
         return False
@@ -89,11 +162,13 @@ def load_freshora_model():
 
         print(error)
 
+        model = None
+
         return False
 
 
 # ============================================================
-# 3. IMAGE PREDICTION
+# 4. IMAGE PREDICTION
 # ============================================================
 
 def predict_freshness(image_path):
@@ -122,6 +197,8 @@ def predict_freshness(image_path):
             axis=0
         )
 
+        # The trained model should contain its own
+        # Rescaling(1./255) preprocessing layer.
         predictions = model.predict(
             image_array,
             verbose=0
@@ -130,6 +207,15 @@ def predict_freshness(image_path):
         prediction_index = int(
             np.argmax(predictions)
         )
+
+        # Make sure the model output and class list match.
+        if prediction_index >= len(CLASS_NAMES):
+
+            print(
+                "Model output does not match the class list."
+            )
+
+            return None, 0.0
 
         prediction = CLASS_NAMES[
             prediction_index
@@ -153,7 +239,7 @@ def predict_freshness(image_path):
 
 
 # ============================================================
-# 4. FRESHORA USER INTERFACE
+# 5. FRESHORA USER INTERFACE
 # ============================================================
 
 class FreshoraLayout(BoxLayout):
@@ -422,22 +508,28 @@ class FreshoraLayout(BoxLayout):
 
 
 # ============================================================
-# 5. FRESHORA APP
+# 6. FRESHORA APP
 # ============================================================
 
 class FreshoraApp(App):
 
     def build(self):
 
+        global CLASS_NAMES
+
         self.title = PROJECT_NAME
 
+        # Load the class ordering produced by train.py.
+        CLASS_NAMES = load_class_names()
+
+        # Load the trained model.
         load_freshora_model()
 
         return FreshoraLayout()
 
 
 # ============================================================
-# 6. START APP
+# 7. START APP
 # ============================================================
 
 if __name__ == "__main__":

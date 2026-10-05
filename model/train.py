@@ -408,3 +408,190 @@ print(
 )
 
 print("\nFreshora AI model is ready.\n")
+# ============================================================
+# FOOD FRESHNESS AI - TRAINING
+# ============================================================
+
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import MobileNetV2
+import os
+
+# ============================================================
+# 1. PROJECT SETTINGS
+# ============================================================
+
+PROJECT_NAME = "Food Freshness AI"
+
+DATASET_PATH = "data/banana"
+
+IMG_SIZE = (224, 224)
+BATCH_SIZE = 32
+EPOCHS = 10
+
+MODEL_PATH = "food_freshness_model.keras"
+
+print("\n===================================")
+print(PROJECT_NAME)
+print("===================================")
+
+print("TensorFlow version:", tf.__version__)
+print("Dataset path:", DATASET_PATH)
+print("Image size:", IMG_SIZE)
+print("Batch size:", BATCH_SIZE)
+
+
+# ============================================================
+# 2. CHECK DATASET
+# ============================================================
+
+if not os.path.exists(DATASET_PATH):
+    raise FileNotFoundError(
+        f"Dataset not found at: {DATASET_PATH}"
+    )
+
+
+# ============================================================
+# 3. LOAD TRAINING DATA
+# ============================================================
+
+train_dataset = tf.keras.utils.image_dataset_from_directory(
+    DATASET_PATH,
+    validation_split=0.2,
+    subset="training",
+    seed=123,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE
+)
+
+
+# ============================================================
+# 4. LOAD VALIDATION DATA
+# ============================================================
+
+validation_dataset = tf.keras.utils.image_dataset_from_directory(
+    DATASET_PATH,
+    validation_split=0.2,
+    subset="validation",
+    seed=123,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE
+)
+
+
+# ============================================================
+# 5. GET CLASS NAMES
+# ============================================================
+
+class_names = train_dataset.class_names
+
+print("\nClasses found:")
+for i, name in enumerate(class_names):
+    print(i, "->", name)
+
+
+# ============================================================
+# 6. IMPROVE DATA PERFORMANCE
+# ============================================================
+
+AUTOTUNE = tf.data.AUTOTUNE
+
+train_dataset = train_dataset.prefetch(
+    buffer_size=AUTOTUNE
+)
+
+validation_dataset = validation_dataset.prefetch(
+    buffer_size=AUTOTUNE
+)
+
+
+# ============================================================
+# 7. DATA AUGMENTATION
+# ============================================================
+
+data_augmentation = tf.keras.Sequential([
+    layers.RandomFlip("horizontal"),
+    layers.RandomRotation(0.1),
+    layers.RandomZoom(0.1)
+])
+
+
+# ============================================================
+# 8. CREATE AI MODEL
+# ============================================================
+
+base_model = MobileNetV2(
+    input_shape=IMG_SIZE + (3,),
+    include_top=False,
+    weights="imagenet"
+)
+
+# Freeze the pre-trained model
+base_model.trainable = False
+
+
+# ============================================================
+# 9. BUILD FINAL MODEL
+# ============================================================
+
+model = models.Sequential([
+    data_augmentation,
+
+    layers.Rescaling(1./255),
+
+    base_model,
+
+    layers.GlobalAveragePooling2D(),
+
+    layers.Dropout(0.2),
+
+    layers.Dense(len(class_names), activation="softmax")
+])
+
+
+# ============================================================
+# 10. COMPILE MODEL
+# ============================================================
+
+model.compile(
+    optimizer="adam",
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+
+# ============================================================
+# 11. SHOW MODEL INFORMATION
+# ============================================================
+
+print("\nModel structure:")
+model.summary()
+
+
+# ============================================================
+# 12. TRAIN THE AI
+# ============================================================
+
+print("\nStarting training...")
+
+history = model.fit(
+    train_dataset,
+    validation_data=validation_dataset,
+    epochs=EPOCHS
+)
+
+
+# ============================================================
+# 13. SAVE MODEL
+# ============================================================
+
+model.save(MODEL_PATH)
+
+print("\n===================================")
+print("TRAINING COMPLETED")
+print("===================================")
+
+print("Model saved as:", MODEL_PATH)
+
+print("\nYour AI has learned these classes:")
+print(class_names)

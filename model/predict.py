@@ -271,3 +271,158 @@ print(
 )
 
 print("===================================\n")
+
+# ============================================================
+# FOOD FRESHNESS AI - PREDICTION
+# ============================================================
+
+import tensorflow as tf
+import numpy as np
+import sys
+import os
+
+
+# ============================================================
+# 1. SETTINGS
+# ============================================================
+
+MODEL_PATH = "food_freshness_model.keras"
+
+IMG_SIZE = (224, 224)
+
+CLASS_NAMES = [
+    "fresh",
+    "ripe",
+    "spoiled"
+]
+
+
+# ============================================================
+# 2. CHECK MODEL
+# ============================================================
+
+if not os.path.exists(MODEL_PATH):
+    print("ERROR: Model file not found.")
+    print("Please run train.py first.")
+    sys.exit()
+
+
+# ============================================================
+# 3. GET IMAGE PATH
+# ============================================================
+
+if len(sys.argv) < 2:
+    print("Please provide an image path.")
+    print("\nExample:")
+    print("python predict.py test.jpg")
+    sys.exit()
+
+
+image_path = sys.argv[1]
+
+
+# ============================================================
+# 4. CHECK IMAGE
+# ============================================================
+
+if not os.path.exists(image_path):
+    print("ERROR: Image not found.")
+    print("Check the image path and try again.")
+    sys.exit()
+
+
+# ============================================================
+# 5. LOAD TRAINED MODEL
+# ============================================================
+
+print("\nLoading AI model...")
+
+model = tf.keras.models.load_model(MODEL_PATH)
+
+
+# ============================================================
+# 6. LOAD IMAGE
+# ============================================================
+
+image = tf.keras.utils.load_img(
+    image_path,
+    target_size=IMG_SIZE
+)
+
+
+# ============================================================
+# 7. CONVERT IMAGE TO ARRAY
+# ============================================================
+
+image_array = tf.keras.utils.img_to_array(image)
+
+
+# ============================================================
+# 8. ADD BATCH DIMENSION
+# ============================================================
+
+image_array = tf.expand_dims(
+    image_array,
+    0
+)
+
+
+# ============================================================
+# 9. MAKE PREDICTION
+# ============================================================
+
+predictions = model.predict(image_array)
+
+predicted_index = np.argmax(predictions[0])
+
+confidence = float(
+    predictions[0][predicted_index]
+) * 100
+
+
+# ============================================================
+# 10. GET RESULT
+# ============================================================
+
+predicted_class = CLASS_NAMES[predicted_index]
+
+
+# ============================================================
+# 11. DISPLAY RESULT
+# ============================================================
+
+print("\n===================================")
+print("     FOOD FRESHNESS AI")
+print("===================================")
+
+print("\nPrediction:", predicted_class)
+print("Confidence:", round(confidence, 2), "%")
+
+
+# ============================================================
+# 12. DISPLAY MESSAGE
+# ============================================================
+
+if predicted_class == "fresh":
+
+    print("\nThe AI predicts that the food appears fresh.")
+
+elif predicted_class == "ripe":
+
+    print("\nThe AI predicts that the food appears ripe.")
+
+elif predicted_class == "spoiled":
+
+    print("\nThe AI predicts that the food appears spoiled.")
+
+
+# ============================================================
+# 13. SAFETY WARNING
+# ============================================================
+
+print("\n-----------------------------------")
+print("WARNING:")
+print("AI predictions can be wrong.")
+print("Do not rely only on this prediction")
+print("to decide whether food is safe to eat.")
+print("-----------------------------------")

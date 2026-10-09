@@ -595,3 +595,152 @@ print("Model saved as:", MODEL_PATH)
 
 print("\nYour AI has learned these classes:")
 print(class_names)
+
+import json
+from pathlib import Path
+import tensorflow as tf
+
+# SETTINGS
+DATASET_PATH = Path("data")
+MODEL_DIR = Path("models")
+MODEL_PATH = MODEL_DIR / "food_freshness.keras"
+LABELS_PATH = MODEL_DIR / "labels.json"
+
+IMG_SIZE = (224, 224)
+BATCH_SIZE = 16
+EPOCHS = 10
+SEED = 123
+
+def main():
+    if not DATASET_PATH.exists():
+        raise FileNotFoundError(
+            f"Dataset folder not found: {DATASET_PATH.resolve()}"
+        )
+
+    # Find food folders containing condition subfolders.
+    food_folders = sorted(
+        p for p in DATASET_PATH.iterdir() if p.is_dir()
+    )
+
+    class_dirs = {}
+    for food in food_folders:
+        for condition in sorted(food.iterdir()):
+            if not condition.is_dir():
+                continue
+
+            images = [
+                p for p in condition.rglob("*")
+                if p.is_file()
+                and p.suffix.lower() in
+                {".jpg", ".jpeg", ".png", ".bmp", ".gif"}
+            ]
+
+            if images:
+                class_name = f"{food.name}_{condition.name}"
+                class_dirs[class_name] = condition
+
+    if len(class_dirs) < 2:
+        raise ValueError(
+            "Add images to at least two condition folders "
+            "inside data/food/condition/."
+        )
+
+    print("Classes found:")
+    for name, folder in class_dirs.items():
+        print(f"  {name}: {folder}")
+
+    # Combine the images into a temporary class-based dataset.
+    # This avoids treating each food folder as a separate condition.
+    import shutil
+
+    prepared = MODEL_DIR / "prepared_data"
+    if prepared.exists():
+        shutil.rmtree(prepared)
+    prepared.mkdir(parents=True)
+
+    for class_name, source in class_dirs.items():
+        destination = prepared / class_name
+        destination.mkdir()
+        for i, img in enumerate(sorted(source.rglob("*"))):
+            if img.is_file() and img.suffix.lower() in {
+                ".jpg", ".jpeg", ".png", ".bmp", ".gif"
+            }:
+                shutil.copy2(img, destination / f"{i}_{img.name}")
+
+    train_ds = tf.keras.utils.image_dataset_from_directory(
+        str(prepared),
+        validation_split=0.2,
+        subset="training",
+        seed=SEED,
+        image_size=IMG_SIZE,
+        batch_size=BATCH_SIZE,
+        label_mode="int"
+    )
+
+    val_ds = tf.keras.utils.image_dataset_from_directory(
+        str(prepared),
+        validation_split=0.2,
+        subset="validation",
+        seed=SEED,
+        image_size=IMG_SIZE,
+        batch_size=BATCH_SIZE,
+        label_mode="int"
+    )
+
+    class_names = train_ds.class_names
+    print("Model labels:", class_names)
+
+    # Check that every class has enough images for splitting.
+    train_ds = train_ds.prefetch(tf.data.AUTOTUNE)
+    val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
+
+    # A simple CNN for a beginner project.
+    model = tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(224, 224, 3)),
+        tf.keras.layers.Rescaling(1.0 / 255),
+        tf.keras.layers.Conv2D(
+            16, 3, activation="relu"
+        ),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Conv2D(
+            32, 3, activation="relu"
+        ),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.Conv2D(
+            64, 3, activation="relu"
+        ),
+        tf.keras.layers.MaxPooling2D(),
+        tf.keras.layers.GlobalAveragePooling2D(),
+        tf.keras.layers.Dense(64, activation="relu"),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.Dense(
+            len(class_names), activation="softmax"
+        )
+    ])
+
+    model.compile(
+        optimizer="adam",
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
+    )
+
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("\nStarting training...")
+    model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=EPOCHS
+    )
+
+    model.save(str(MODEL_PATH))
+    with open(LABELS_PATH, "w", encoding="utf-8") as f:
+        json.dump(class_names, f, indent=2)
+
+    print("\nTraining completed!")
+    print("Model saved:", MODEL_PATH)
+    print("Labels saved:", LABELS_PATH)
+
+if __name__ == "__main__":
+    main()
+

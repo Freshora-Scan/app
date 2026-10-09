@@ -426,3 +426,71 @@ print("AI predictions can be wrong.")
 print("Do not rely only on this prediction")
 print("to decide whether food is safe to eat.")
 print("-----------------------------------")
+
+import json
+import sys
+from pathlib import Path
+import numpy as np
+import tensorflow as tf
+
+MODEL_PATH = Path("models/food_freshness.keras")
+LABELS_PATH = Path("models/labels.json")
+IMG_SIZE = (224, 224)
+
+def predict_image(image_path):
+    image_path = Path(image_path)
+
+    if not image_path.is_file():
+        raise FileNotFoundError(
+            f"Image not found: {image_path.resolve()}"
+        )
+
+    if not MODEL_PATH.is_file() or not LABELS_PATH.is_file():
+        raise FileNotFoundError(
+            "Train the model first by running: python train.py"
+        )
+
+    model = tf.keras.models.load_model(str(MODEL_PATH))
+
+    with open(LABELS_PATH, "r", encoding="utf-8") as f:
+        labels = json.load(f)
+
+    image = tf.keras.utils.load_img(
+        image_path, target_size=IMG_SIZE
+    )
+    image_array = tf.keras.utils.img_to_array(image)
+    image_array = np.expand_dims(image_array, axis=0)
+
+    probabilities = model.predict(image_array, verbose=0)[0]
+    best_index = int(np.argmax(probabilities))
+
+    print("\n--- FOOD FRESHNESS AI ---")
+    print("Image:", image_path.name)
+    print("Predicted class:", labels[best_index])
+    print(
+        "Model confidence: "
+        f"{probabilities[best_index] * 100:.2f}%"
+    )
+
+    print("\nAll class scores:")
+    for i in np.argsort(probabilities)[::-1]:
+        print(f"{labels[i]}: {probabilities[i] * 100:.2f}%")
+
+    print(
+        "\nWarning: This is an AI estimate, not a food-safety "
+        "guarantee. Never rely on the prediction alone."
+    )
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print(
+            'Usage: python predict.py "test_images/banana.jpg"'
+        )
+        sys.exit(1)
+
+    try:
+        predict_image(sys.argv[1])
+    except Exception as error:
+        print("Prediction failed:", error)
+        sys.exit(1)
+

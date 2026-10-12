@@ -1,0 +1,6 @@
+tensorflow>=2.16
+pillow
+numpy
+kivy>=2.3
+openai>=1.40
+matplotlib

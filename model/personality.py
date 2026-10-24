@@ -1,11 +1,11 @@
 # ============================================================
-# FRESHORA - PERSONALITY
+# FRESHORA - PERSONALITY (multi-food)
 #
 # Two jobs, kept strictly apart:
 #
-#   1. THE VERDICT  (VERDICTS below)
+#   1. THE VERDICT  (VERDICT_TEXT below)
 #      Fixed text written by YOU. The AI can never change it,
-#      so a rotten banana can never be called "safe".
+#      so a rotten apple can never be called "safe".
 #
 #   2. THE VOICE
 #      A fresh, weird reply every time. Written by an OpenAI model
@@ -13,6 +13,12 @@
 #      offline generator (no internet, no cost, never crashes).
 #
 # The final message = voice + verdict line.
+#
+# Class names look like  "<food>__<state>"  (apple__ripe,
+# bitter gourd__rotten). Folder names decide everything, so the
+# state folder names your team uses should be in STATE_GROUPS below.
+# A state that is NOT listed is never called safe: the verdict
+# says "check it yourself".
 # ============================================================
 
 import os
@@ -21,68 +27,154 @@ import re
 from collections import deque
 from dataclasses import dataclass
 
+SEPARATOR = "__"      # must match train.py
+
 
 # ============================================================
-# 1. VERDICTS (facts, never written by the AI)
+# 1. STATE NAMES -> HOW FRESH THEY MEAN
+# ============================================================
+# Add your own folder names here (lower case, use _ for spaces).
+# Be careful: only list a state as "ripe"/"unripe" if it really is
+# safe. Words that can hide a danger (green potato, sprouted
+# potato...) are deliberately NOT listed.
+
+STATE_GROUPS = {
+    "unripe": {
+        "unripe", "underripe", "under_ripe", "not_ripe", "immature",
+    },
+    "ripe": {
+        "ripe", "fresh", "good", "healthy", "ready",
+    },
+    "overripe": {
+        "overripe", "over_ripe", "old", "wilted", "soft", "stale",
+        "shriveled", "shrivelled", "wrinkled", "bruised", "aged", "limp",
+    },
+    "rotten": {
+        "rotten", "rotting", "rot", "spoiled", "spoilt", "bad",
+        "mouldy", "moldy", "mould", "mold", "decayed", "fungus",
+        "fungal", "expired",
+    },
+}
+
+
+def normalise(text):
+    return text.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def split_label(label):
+    """'apple__ripe' -> ('apple', 'ripe').  'ripe' -> ('', 'ripe')."""
+    if SEPARATOR in label:
+        food, state = label.split(SEPARATOR, 1)
+    else:
+        food, state = "", label
+    return food.strip().lower(), state.strip().lower()
+
+
+def display_name(text):
+    """'bitter_gourd' / 'bitter gourd' -> 'bitter gourd'."""
+    return text.replace("_", " ").strip()
+
+
+def classify_state(state):
+    """Returns 'unripe' | 'ripe' | 'overripe' | 'rotten' | None."""
+    key = normalise(state)
+    for group, names in STATE_GROUPS.items():
+        if key in names:
+            return group
+    return None
+
+
+# ============================================================
+# 2. VERDICTS (facts, never written by the AI)
 # ============================================================
 # safe: "yes" | "maybe" | "no" | "unknown"   (the app uses it for colours)
 
-VERDICTS = {
-    "unripe": {
-        "safe": "yes",
-        "line": "Verdict: UNRIPE. Safe to eat, but firm and starchy. "
-                "Give it a few days at room temperature.",
-    },
-    "ripe": {
-        "safe": "yes",
-        "line": "Verdict: RIPE. Safe to eat. This is peak banana.",
-    },
-    "overripe": {
-        "safe": "maybe",
-        "line": "Verdict: OVERRIPE. Usually fine if there is no mould, "
-                "leaking or sour smell. Best for smoothies or banana bread.",
-    },
-    "rotten": {
-        "safe": "no",
-        "line": "Verdict: ROTTEN. Do NOT eat it. Bin it or compost it.",
-    },
-}
-
-UNSURE = {
-    "safe": "unknown",
-    "line": "Verdict: NOT SURE. Retake the photo in good light with the "
-            "whole banana in frame, and trust your eyes and nose.",
-}
-
-UNKNOWN_LABEL = {
-    "safe": "unknown",
-    "line": "Verdict: UNKNOWN. Do not rely on this scan. Check the food "
-            "yourself (look, smell, texture).",
+VERDICT_TEXT = {
+    "unripe": (
+        "yes",
+        "Usually safe to eat, but not at its best yet. "
+        "Give it a few days to ripen.",
+    ),
+    "ripe": (
+        "yes",
+        "Safe to eat. This is peak freshness.",
+    ),
+    "overripe": (
+        "maybe",
+        "Usually fine if there is no mould, leaking or sour smell. "
+        "Use it soon, for cooking, smoothies or baking.",
+    ),
+    "rotten": (
+        "no",
+        "Do NOT eat it. Bin it or compost it.",
+    ),
 }
 
 
-def get_verdict(label, reliable=True):
-    """Fixed verdict for a class. Low confidence always wins."""
-    if not reliable:
-        return UNSURE
-    return VERDICTS.get(label, UNKNOWN_LABEL)
+def get_verdict(food, state, food_ok=True, state_ok=True, judgeable=True):
+    """
+    The fixed verdict line. Doubt always beats a confident-sounding
+    answer: if anything is uncertain, the verdict says so.
+    """
+    name = display_name(food)
+    subject = f" {name}" if name else ""
+
+    if not food_ok:
+        return {
+            "safe": "unknown",
+            "line": "Verdict: NOT SURE what this is. Retake the photo in "
+                    "good light, with the whole food in frame on a plain "
+                    "background, and check it yourself.",
+        }
+
+    if not judgeable:
+        return {
+            "safe": "unknown",
+            "line": f"Verdict: this looks like{subject or ' food'}, but "
+                    "Freshora has not learned how to judge its freshness "
+                    "yet. Check it yourself (look, smell, texture).",
+        }
+
+    if not state_ok:
+        return {
+            "safe": "unknown",
+            "line": f"Verdict: NOT SURE how fresh this{subject or ' food'} "
+                    "is. Retake the photo in good light with the whole "
+                    "thing in frame, and trust your eyes and nose.",
+        }
+
+    group = classify_state(state)
+    if group is None:
+        return {
+            "safe": "unknown",
+            "line": f"Verdict: {display_name(state).upper()}{subject}. "
+                    "Freshora has no safety rule for this condition. "
+                    "Check it yourself (look, smell, texture).",
+        }
+
+    safe, text = VERDICT_TEXT[group]
+    return {
+        "safe": safe,
+        "line": f"Verdict: {display_name(state).upper()}{subject}. {text}",
+    }
 
 
 # ============================================================
-# 2. THE PERSONA (used by the AI model)
+# 3. THE PERSONA (used by the AI model)
 # ============================================================
 
 PERSONA = """You are FRESHORA, the resident oracle of a food-scanner app.
-You are a dramatic, slightly unhinged fruit-bowl prophet. You treat
-bananas as if they were tiny celebrities, rivals, or exes. You are
-funny, specific, and strange, never corporate, never generic.
+You are a dramatic, slightly unhinged kitchen prophet. You treat fruit
+and vegetables as if they were tiny celebrities, rivals, or exes. You
+are funny, specific, and strange, never corporate, never generic.
 
 Rules:
 - 2 to 3 short sentences. Maximum 45 words.
 - Be original every time. Never reuse a phrase from the AVOID list.
 - Never say "As an AI", never apologise, no emojis, no hashtags.
 - The VERDICT you are given is a fact. Never contradict it. Never
-  suggest eating something whose verdict is ROTTEN or NOT SURE.
+  suggest eating something whose verdict is ROTTEN, NOT SURE or
+  has no safety rule.
 - Do not write the verdict line yourself. It is added separately.
 - Weird is good. Mean to the user is not."""
 
@@ -95,10 +187,10 @@ MOODS = [
 
 FORMS = [
     "a tiny prophecy",
-    "a fake weather report for the fruit bowl",
+    "a fake weather report for the kitchen counter",
     "a one-line courtroom ruling",
     "a sports commentator losing their mind",
-    "a message from the banana itself",
+    "a message from the food itself",
     "a dramatic whisper",
     "a fortune-cookie that went off the rails",
     "a breakup text from the fruit bowl",
@@ -115,28 +207,29 @@ WEIRD_THINGS = [
 
 
 # ============================================================
-# 3. OFFLINE VOICE (no internet needed)
+# 4. OFFLINE VOICE (no internet needed)
 # ============================================================
 # reply = opener + middle + closer (+ sometimes an aside).
-# 6 x 6 x 6 per class = 216 combinations, times the asides.
+# {food} / {Food} are filled in; lines are written so they also
+# read fine for plural foods like "grapes".
 
 OFFLINE = {
     "unripe": {
         "openers": [
-            "Ah. A banana still in its teenage phase.",
-            "Green. Stubborn. Wearing its school uniform.",
+            "Ah. {Food}, still in the teenage phase.",
+            "Stubborn. Firm. Wearing a school uniform.",
             "This one is not ready, and it knows it.",
-            "I sense a banana that skipped the meeting.",
-            "Behold: a fruit with commitment issues.",
-            "The peel whispers, 'not yet, not yet.'",
+            "I sense someone skipped the ripening meeting.",
+            "Behold: commitment issues, in edible form.",
+            "The skin whispers, 'not yet, not yet.'",
         ],
         "middles": [
-            "It is eatable, but it will taste like chalk with ambitions.",
+            "It's edible, but it will taste like chalk with ambitions.",
             "Bite it now and it bites back, spiritually.",
-            "It's safe, just deeply unimpressed with itself.",
+            "It's safe enough, just deeply unimpressed with itself.",
             "Give it time. Even legends start out starchy.",
-            "It has the texture of a determined eraser.",
-            "Nothing wrong here, only a lack of sweetness and drama.",
+            "The texture is a determined eraser.",
+            "Nothing wrong here, only a shortage of sweetness and drama.",
         ],
         "closers": [
             "Check back in a few days.",
@@ -144,57 +237,57 @@ OFFLINE = {
             "Patience, little scanner.",
             "Do not poke it. It hates being poked.",
             "Ripeness cannot be rushed, only respected.",
-            "Come back when it's wearing yellow.",
+            "Come back when it has finished growing up.",
         ],
     },
     "ripe": {
         "openers": [
             "Oh. OH. This is the one.",
-            "Golden hour has arrived in peel form.",
-            "I have seen empires fall, but never a banana this on time.",
-            "This banana walked in like it owns the bowl.",
-            "Sunshine, but edible.",
-            "Applause. The fruit has peaked.",
+            "Golden hour has arrived, in edible form.",
+            "I have seen empires fall, but never anything this on time.",
+            "Something just walked in like it owns the kitchen.",
+            "Peak performance. No notes.",
+            "Applause. The moment has peaked.",
         ],
         "middles": [
-            "Sweet, soft, structurally confident.",
-            "It's safe, fragrant, and a little smug about it.",
-            "Peak banana. The kind poets write tragic letters about.",
-            "It is exactly as ready as a banana can legally be.",
-            "Zero drama, maximum sweetness.",
+            "Fresh, fragrant, structurally confident.",
+            "It's safe, and a little smug about it.",
+            "Peak {food}. The kind poets write tragic letters about.",
+            "It is exactly as ready as it can legally be.",
+            "Zero drama, maximum flavour.",
             "Go on. The universe has signed the permission slip.",
         ],
         "closers": [
             "Eat it before it gets ideas.",
             "Do not waste this moment on a scan.",
-            "Peel, chew, nod slowly.",
-            "This is your sign. It's yellow.",
-            "Banana. Mouth. Now.",
+            "Wash, bite, nod slowly.",
+            "This is your sign.",
+            "Eat. Now.",
             "Enjoy the good timeline.",
         ],
     },
     "overripe": {
         "openers": [
-            "This banana has seen things. Mostly Tuesdays.",
-            "Spotted, soft, and philosophical.",
-            "A banana in its dramatic third act.",
+            "This one has seen things. Mostly Tuesdays.",
+            "Soft, spotted, and philosophical.",
+            "A dramatic third act.",
             "Freckles everywhere. A true veteran.",
-            "The fruit bowl's retired jazz musician has arrived.",
-            "Ooh, this one is basically a sweet puddle with a plan.",
+            "The kitchen's retired jazz musician has arrived.",
+            "Ooh, this one is basically a puddle with a plan.",
         ],
         "middles": [
             "It's probably fine if there's no mould or sour smell.",
-            "Too mushy for a dignified snack, perfect for banana bread.",
+            "Too tired for a dignified snack, perfect for cooking.",
             "Sweetness at maximum, structure at a minimum.",
             "Smoothie destiny is calling.",
             "Sniff first. Your nose is the real judge here.",
             "Still has dignity, just not much shape.",
         ],
         "closers": [
-            "Mash it. Bake it. Respect it.",
+            "Mash it. Cook it. Respect it.",
             "Freeze it before it files a complaint.",
             "Check for mould, then proceed.",
-            "Its final form is bread.",
+            "Its final form is dinner.",
             "Do not wait another day.",
             "Use it today or lose it.",
         ],
@@ -202,18 +295,18 @@ OFFLINE = {
     "rotten": {
         "openers": [
             "No. Absolutely not.",
-            "This banana has left the building and taken the lease.",
-            "I'm sorry for your loss. The banana is gone.",
-            "That is not fruit anymore, that is a cautionary tale.",
+            "This one has left the building and taken the lease.",
+            "I'm sorry for your loss. It is gone.",
+            "That is not food anymore, that is a cautionary tale.",
             "The prophecy is dark, and it smells worse.",
-            "This is a banana funeral.",
+            "This is a funeral.",
         ],
         "middles": [
             "Whatever lives in there is paying no rent.",
             "It has crossed a line that cannot be uncrossed.",
             "Even the fruit flies are checking their options.",
             "It has become a science project without consent.",
-            "The bowl wants a divorce.",
+            "The kitchen wants a divorce.",
             "Hope is gone. Mould is not.",
         ],
         "closers": [
@@ -225,10 +318,11 @@ OFFLINE = {
             "Not edible. Not negotiable.",
         ],
     },
+    # Doubt about the photo, the food, or the freshness.
     "unsure": {
         "openers": [
             "The fog is thick today.",
-            "I squinted. The banana squinted back.",
+            "I squinted. The food squinted back.",
             "My crystal ball is buffering.",
             "This photo is shy.",
             "The oracle needs better lighting.",
@@ -243,12 +337,39 @@ OFFLINE = {
             "The pixels are being mysterious.",
         ],
         "closers": [
-            "Try again with the whole banana in view.",
+            "Try again with the whole thing in view.",
             "Find better light and a plain background.",
             "Take another photo, no dramatic angles.",
             "Use your nose in the meantime.",
             "Another shot, please.",
             "Closer, brighter, calmer.",
+        ],
+    },
+    # A state Freshora has no safety rule for.
+    "other": {
+        "openers": [
+            "I know this one, but not its mood.",
+            "A condition I have no rulebook for.",
+            "Intriguing. Unlisted. Slightly suspicious.",
+            "My scrolls do not cover this state.",
+            "The oracle consulted the manual. The manual shrugged.",
+            "Unfamiliar territory, ahoy.",
+        ],
+        "middles": [
+            "I can name the food, but not the verdict.",
+            "I will not gamble with your stomach.",
+            "Facts are missing, and I refuse to invent them.",
+            "Safety questions deserve real answers.",
+            "Better a cautious oracle than a sorry one.",
+            "The data is polite but unhelpful.",
+        ],
+        "closers": [
+            "Check it yourself: look, smell, touch.",
+            "When in doubt, throw it out.",
+            "Use your eyes and nose.",
+            "Ask a human with a nose.",
+            "Trust your senses over mine.",
+            "Let your nose make the call.",
         ],
     },
 }
@@ -264,7 +385,7 @@ ASIDES = [
 
 
 # ============================================================
-# 4. REPLY OBJECT
+# 5. REPLY OBJECT
 # ============================================================
 
 @dataclass
@@ -286,7 +407,7 @@ _last_parts = {}
 
 
 # ============================================================
-# 5. OFFLINE GENERATOR
+# 6. OFFLINE GENERATOR
 # ============================================================
 
 def _pick_different(options, key):
@@ -297,7 +418,7 @@ def _pick_different(options, key):
     return chosen
 
 
-def _offline_reply(group):
+def _offline_reply(group, food):
     bank = OFFLINE[group]
     parts = [
         _pick_different(bank["openers"], (group, "o")),
@@ -306,25 +427,31 @@ def _offline_reply(group):
     ]
     text = " ".join(parts)
     if random.random() < 0.5:
-        text += " " + random.choice(ASIDES).format(thing=random.choice(WEIRD_THINGS))
-    return text
+        text += " " + random.choice(ASIDES)
+
+    name = display_name(food) or "food"
+    return text.format(
+        food=name,
+        Food=name[:1].upper() + name[1:],
+        thing=random.choice(WEIRD_THINGS),
+    )
 
 
 # ============================================================
-# 6. AI GENERATOR (OpenAI)
+# 7. AI GENERATOR (OpenAI)
 # ============================================================
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
-# Words that would contradict a "do not eat" verdict.
+# Words that would contradict a "do not eat" / "not sure" verdict.
 _BAD_FOR_UNSAFE = re.compile(
     r"\b(go ahead|devour|bon app|enjoy it|eat it up|dig in|safe to eat)\b",
     re.IGNORECASE,
 )
 
 
-def _ai_reply(label, confidence, verdict, group):
-    """Returns (text, error). text is None when the AI could not be used."""
+def _ai_reply(food, state, food_conf, state_conf, verdict):
+    """Returns (text, note). text is None when the AI could not be used."""
     if not os.environ.get("OPENAI_API_KEY"):
         return None, "OPENAI_API_KEY is not set"
 
@@ -337,10 +464,12 @@ def _ai_reply(label, confidence, verdict, group):
     form = random.choice(FORMS)
     thing = random.choice(WEIRD_THINGS)
     avoid = "\n".join(f"- {r}" for r in _recent) or "- (nothing yet)"
+    name = display_name(food) or "a food item"
 
     user_message = (
-        f"Scan result: the banana is {label.upper()} "
-        f"(confidence {confidence * 100:.0f}%).\n"
+        f"Scan result: {name}, condition: {display_name(state) or 'unknown'} "
+        f"(food confidence {food_conf * 100:.0f}%, "
+        f"condition confidence {state_conf * 100:.0f}%).\n"
         f"{verdict['line']}\n\n"
         f"Your mood right now: {mood}.\n"
         f"Write it as: {form}.\n"
@@ -379,33 +508,35 @@ def _ai_reply(label, confidence, verdict, group):
 
 
 # ============================================================
-# 7. MAIN ENTRY POINT
+# 8. MAIN ENTRY POINT
 # ============================================================
 
-def make_reply(label, confidence, reliable=True, use_ai=True):
+def make_reply(food, state, food_conf=1.0, state_conf=1.0,
+               food_ok=True, state_ok=True, judgeable=True, use_ai=True):
     """
-    label       class name from the model ("ripe", "rotten", ...)
-    confidence  0.0 - 1.0
-    reliable    False when the model was not confident enough
-    use_ai      False to force the offline voice
+    food, state   parsed from the class name ("apple", "ripe")
+    *_conf        0.0 - 1.0 confidence for the food and for the state
+    food_ok       False when the model is not sure what the food is
+    state_ok      False when the model is not sure how fresh it is
+    judgeable     False when the model only knows ONE state for this
+                  food (so it cannot tell fresh from rotten)
+    use_ai        False to force the offline voice
     """
-    verdict = get_verdict(label, reliable)
+    verdict = get_verdict(food, state, food_ok, state_ok, judgeable)
 
-    if not reliable:
+    if not food_ok or not state_ok or not judgeable:
         group = "unsure"
-    elif label in OFFLINE:
-        group = label
     else:
-        group = "unsure"
+        group = classify_state(state) or "other"
 
     text, note = None, "AI disabled"
     if use_ai:
-        text, note = _ai_reply(label, confidence, verdict, group)
+        text, note = _ai_reply(food, state, food_conf, state_conf, verdict)
 
     source = "ai"
     if text is None:
         source = "offline"
-        text = _offline_reply(group)
+        text = _offline_reply(group, food)
 
     _recent.append(text)
 
@@ -415,5 +546,5 @@ def make_reply(label, confidence, reliable=True, use_ai=True):
         safe=verdict["safe"],
         source=source,
         note=note,
-  )
-  
+    )
+                   

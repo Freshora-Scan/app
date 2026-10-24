@@ -197,8 +197,12 @@ class FreshoraLayout(BoxLayout):
         self.result.text = (
             f"{escape_markup(reply.text)}\n\n"
             f"[b][color={colour}]{escape_markup(reply.verdict_line)}[/color][/b]\n\n"
-            f"[size=13]{escape_markup(prediction.label)} "
-            f"({prediction.confidence * 100:.0f}% sure)[/size]"
+            f"[size=13]{'' if prediction.reliable else 'best guess: '}"
+            f"{escape_markup(prediction.food_name or 'food')} "
+            f"({prediction.food_confidence * 100:.0f}% sure it is this food), "
+            f"{escape_markup(prediction.state)} "
+            f"({prediction.state_confidence * 100:.0f}% sure of the state)"
+            f"[/size]"
         )
         self._done()
 
@@ -221,4 +225,4 @@ class FreshoraApp(App):
 
 if __name__ == "__main__":
     FreshoraApp().run()
-            
+    

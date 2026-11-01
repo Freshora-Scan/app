@@ -1,0 +1,80 @@
+# Builds the Android APK on GitHub's free Linux machines.
+#
+# HOW TO USE
+#   GitHub -> Actions tab -> "Build Android APK" -> Run workflow.
+#   After 20-40 minutes the APK is under "Artifacts" on that run.
+#   To publish it for testers: create a tag starting with "v"
+#   (for example v0.1.0). The APK is then attached to a Release.
+
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
+            libffi-dev libssl-dev automake
+
+      - name: Check the AI model files are in the repo
+        run: |
+          test -f model/freshora_model.tflite || { echo "model/freshora_model.tflite is missing. Run export_tflite.py and commit the result."; exit 1; }
+          test -f model/labels.txt -o -f model/class_names.txt || { echo "model/labels.txt (or class_names.txt) is missing."; exit 1; }
+
+      - name: Install the build tool
+        run: pip install --upgrade buildozer "cython==0.29.34" setuptools
+
+      - name: Get the camera helper
+        run: |
+          git clone --depth 1 https://github.com/Android-for-Python/camerax_provider.git
+          rm -rf camerax_provider/.git
+
+      - name: Cache the Android tools (makes the next build faster)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-
+
+      - name: Build the APK
+        run: buildozer -v android debug
+
+      - name: Keep the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: freshora-apk
+          path: bin/*.apk
+
+      - name: Attach the APK to a Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/*.apk
+          

@@ -1,5 +1,5 @@
 # ============================================================
-# FRESHORA - AI IMAGE PREDICTION (multi-food)
+# FRESHORA - AI IMAGE PREDICTION (laptop AND phone)
 #
 #     py -3.12 model/predict.py path\to\photo.jpg
 #     py -3.12 model/predict.py path\to\photo.jpg --no-ai
@@ -8,16 +8,26 @@
 # Also imported by main.py (the app), so everything lives in
 # the FreshoraPredictor class and nothing runs on import.
 #
+# WHAT CHANGED IN THIS VERSION
+#   A phone cannot run full TensorFlow. So the predictor now prefers
+#   the small phone model (freshora_model.tflite, made by
+#   export_tflite.py) and runs it with whichever TFLite runtime is
+#   installed:
+#       phone:   tflite_runtime
+#       laptop:  tensorflow (it contains the same thing)
+#   If there is no .tflite file yet, the laptop falls back to the
+#   old freshora_model.keras so nothing breaks before you export.
+#
 # The model's classes are "<food>__<state>" (apple__ripe ...).
 # We answer two questions separately:
 #   1. WHAT food is it?      -> add up all states of each food
 #   2. HOW fresh is it?      -> best state among that food's states
-# Splitting it this way is much more reliable than trusting one
-# single winner among dozens of classes.
 # ============================================================
 
+import importlib
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,8 +48,10 @@ import personality  # noqa: E402
 # 1. SETTINGS
 # ============================================================
 
-MODEL_PATH = HERE / "freshora_model.keras"
-CLASS_NAMES_PATH = HERE / "class_names.txt"
+TFLITE_PATH = HERE / "freshora_model.tflite"
+KERAS_PATH = HERE / "freshora_model.keras"
+# export_tflite.py writes labels.txt (a copy of class_names.txt).
+CLASS_NAME_FILES = [HERE / "class_names.txt", HERE / "labels.txt"]
 IMG_SIZE = (224, 224)
 
 # Below these the scan is reported as "not sure" instead of guessing.
@@ -52,6 +64,9 @@ MIN_STATE_CONFIDENCE = 0.55    # how sure it is about the freshness,
 # "safe", even when another state wins. A 60% ripe / 40% rotten scan
 # must come out as "not sure", not as "safe to eat".
 MAX_RISKY_SHARE = 0.25
+
+# The runtimes we try, in this order, to run the .tflite file.
+TFLITE_RUNTIMES = ("tflite_runtime.interpreter", "ai_edge_litert.interpreter")
 
 
 class FreshoraError(Exception):
@@ -81,51 +96,134 @@ class Prediction:
 
 
 # ============================================================
-# 2. THE PREDICTOR
+# 2. HELPERS
 # ============================================================
 
 def read_class_names():
-    if not CLASS_NAMES_PATH.is_file():
-        raise FreshoraError(
-            "class_names.txt was not found.\n"
-            "Train the model first:  py -3.12 model/train.py"
-        )
-    with open(CLASS_NAMES_PATH, "r", encoding="utf-8") as file:
-        return [line.strip() for line in file if line.strip()]
+    for path in CLASS_NAME_FILES:
+        if path.is_file():
+            with open(path, "r", encoding="utf-8") as file:
+                names = [line.strip() for line in file if line.strip()]
+            if names:
+                return names
+    raise FreshoraError(
+        "class_names.txt was not found.\n"
+        "Train the model first:  py -3.12 model/train.py"
+    )
 
+
+def _find_tflite_interpreter():
+    """Returns the Interpreter class of the first runtime that works."""
+    for module_name in TFLITE_RUNTIMES:
+        try:
+            return importlib.import_module(module_name).Interpreter
+        except Exception:
+            continue
+    try:  # the laptop: full TensorFlow contains the same interpreter
+        import tensorflow as tf
+        return tf.lite.Interpreter
+    except Exception:
+        return None
+
+
+def _resize_filter():
+    # Training resized with bilinear; do the same here.
+    resampling = getattr(Image, "Resampling", Image)
+    return resampling.BILINEAR
+
+
+# ============================================================
+# 3. THE PREDICTOR
+# ============================================================
 
 class FreshoraPredictor:
 
     def __init__(self):
-        self.model = None
         self.class_names = []
+        self.backend = None          # "tflite" or "keras" once loaded
+        self._interpreter = None
+        self._input_index = None
+        self._output_index = None
+        self._keras_model = None
+        # Loading and running must never happen on two threads at once.
+        self._lock = threading.RLock()
+
+    @property
+    def loaded(self):
+        return self.backend is not None
 
     # --------------------------------------------------------
     # Load model + class names (call once, takes a few seconds)
     # --------------------------------------------------------
     def load(self):
-        if self.model is not None:
-            return
+        with self._lock:
+            if self.loaded:
+                return
 
-        names = read_class_names()
+            names = read_class_names()
 
-        if not MODEL_PATH.is_file():
+            interpreter_class = _find_tflite_interpreter()
+            if TFLITE_PATH.is_file() and interpreter_class is not None:
+                self._load_tflite(interpreter_class, names)
+            elif KERAS_PATH.is_file():
+                self._load_keras(names)
+            elif TFLITE_PATH.is_file():
+                raise FreshoraError(
+                    "The phone model exists but no TFLite runtime is "
+                    "installed.\nOn the laptop run:  pip install tensorflow\n"
+                    "On the phone the build needs 'tflite-runtime' in "
+                    "buildozer.spec."
+                )
+            else:
+                raise FreshoraError(
+                    "No trained model was found.\n"
+                    "Train it:   py -3.12 model/train.py\n"
+                    "Then export: py -3.12 model/export_tflite.py"
+                )
+            self.class_names = names
+
+    def _load_tflite(self, interpreter_class, names):
+        try:
+            interpreter = interpreter_class(model_path=str(TFLITE_PATH))
+            interpreter.allocate_tensors()
+            inp = interpreter.get_input_details()[0]
+            out = interpreter.get_output_details()[0]
+        except Exception as error:
             raise FreshoraError(
-                "The trained model (freshora_model.keras) was not found.\n"
-                "Train the model first:  py -3.12 model/train.py"
+                "The phone model (freshora_model.tflite) could not be "
+                "loaded.\nExport it again:  py -3.12 model/export_tflite.py\n"
+                f"Details: {error}"
             )
 
-        import tensorflow as tf  # imported here so the app window opens fast
+        outputs = int(out["shape"][-1])
+        if outputs != len(names):
+            raise FreshoraError(
+                f"The model has {outputs} outputs but the class list has "
+                f"{len(names)} names.\nThey come from different training "
+                "runs. Train, then export again."
+            )
+        if np.dtype(inp["dtype"]) != np.float32:
+            raise FreshoraError(
+                "The phone model expects "
+                f"{np.dtype(inp['dtype']).name} input, but Freshora sends "
+                "float32.\nExport it again with export_tflite.py."
+            )
 
+        self._interpreter = interpreter
+        self._input_index = inp["index"]
+        self._output_index = out["index"]
+        self.backend = "tflite"
+
+    def _load_keras(self, names):
         try:
-            model = tf.keras.models.load_model(str(MODEL_PATH))
+            import tensorflow as tf
+            model = tf.keras.models.load_model(str(KERAS_PATH))
         except Exception as error:
             raise FreshoraError(
                 "The model file could not be loaded.\n"
                 "Retrain it with:  py -3.12 model/train.py\n"
                 f"Details: {error}"
             )
-
         outputs = int(model.output_shape[-1])
         if outputs != len(names):
             raise FreshoraError(
@@ -134,30 +232,48 @@ class FreshoraPredictor:
                 "They come from different training runs. "
                 "Retrain with:  py -3.12 model/train.py"
             )
-
-        self.model = model
-        self.class_names = names
+        self._keras_model = model
+        self.backend = "keras"
 
     # --------------------------------------------------------
-    # Turn an image file into the array the model expects
+    # Turn an image into the array the model expects
     # --------------------------------------------------------
     @staticmethod
-    def _prepare(image_path):
-        path = Path(image_path)
-        if not path.is_file():
-            raise FreshoraError(f"Image does not exist:\n{path}")
-
+    def _prepare(source):
+        """source: a file path OR an already opened PIL image."""
         try:
-            with Image.open(path) as img:
+            if isinstance(source, Image.Image):
+                img = source
+            else:
+                path = Path(source)
+                if not path.is_file():
+                    raise FreshoraError(f"Image does not exist:\n{path}")
+                img = Image.open(path)
+            with img:
                 # Phone photos are often rotated through EXIF data.
                 img = ImageOps.exif_transpose(img).convert("RGB")
-                img = img.resize(IMG_SIZE)
+                img = img.resize(IMG_SIZE, _resize_filter())
                 array = np.array(img, dtype=np.float32)
+        except FreshoraError:
+            raise
         except Exception as error:
             raise FreshoraError(f"Could not open this image: {error}")
 
         # NO "/ 255" here. The model rescales by itself.
         return np.expand_dims(array, axis=0)
+
+    # --------------------------------------------------------
+    # Run the model: image batch -> one probability per class
+    # --------------------------------------------------------
+    def _run(self, batch):
+        with self._lock:
+            if self.backend == "tflite":
+                self._interpreter.set_tensor(self._input_index, batch)
+                self._interpreter.invoke()
+                return np.array(
+                    self._interpreter.get_tensor(self._output_index)[0]
+                )
+            return self._keras_model.predict(batch, verbose=0)[0]
 
     # --------------------------------------------------------
     # Turn raw probabilities into food + state
@@ -211,17 +327,17 @@ class FreshoraPredictor:
     # --------------------------------------------------------
     # Predict
     # --------------------------------------------------------
-    def predict(self, image_path):
+    def predict(self, source):
+        """source: image file path or a PIL image."""
         self.load()
-        batch = self._prepare(image_path)
-        probabilities = self.model.predict(batch, verbose=0)[0]
-        return self.interpret(probabilities)
+        batch = self._prepare(source)
+        return self.interpret(self._run(batch))
 
     # --------------------------------------------------------
     # Predict + personality in one call (what the app uses)
     # --------------------------------------------------------
-    def scan(self, image_path, use_ai=True):
-        p = self.predict(image_path)
+    def scan(self, source, use_ai=True):
+        p = self.predict(source)
         reply = personality.make_reply(
             p.food,
             p.state,
@@ -236,7 +352,7 @@ class FreshoraPredictor:
 
 
 # ============================================================
-# 3. COMMAND LINE
+# 4. COMMAND LINE
 # ============================================================
 
 def show_classes():
@@ -306,6 +422,7 @@ def main():
     try:
         print("\nLoading Freshora AI model...")
         predictor.load()
+        print(f"Model type: {predictor.backend}")
         print("Analysing image...")
         p, reply = predictor.scan(args.image, use_ai=not args.no_ai)
     except FreshoraError as error:
@@ -336,5 +453,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    
+    main() 
+ 

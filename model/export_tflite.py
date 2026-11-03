@@ -51,6 +51,45 @@ def find_test_images(count=12):
     return files[:count]
 
 
+def make_inference_model(model, tf):
+    """Rebuild the trained graph without its training-only augmentation."""
+    try:
+        rescale = model.get_layer("rescale")
+        classifier = model.get_layer("classes")
+    except ValueError as error:
+        fail(f"The trained model is missing an expected layer: {error}")
+
+    base_models = [
+        layer for layer in model.layers
+        if isinstance(layer, tf.keras.Model) and layer.name != "augmentation"
+    ]
+    if not base_models:
+        fail("Could not find the MobileNetV2 base model in the trained model.")
+    base = base_models[0]
+
+    pooling_layers = [
+        layer for layer in model.layers
+        if isinstance(layer, tf.keras.layers.GlobalAveragePooling2D)
+    ]
+    dropout_layers = [
+        layer for layer in model.layers
+        if isinstance(layer, tf.keras.layers.Dropout)
+    ]
+    if not pooling_layers or not dropout_layers:
+        fail("The trained model is missing its pooling or dropout layer.")
+
+    inputs = tf.keras.Input(shape=IMG_SIZE + (3,), name="image")
+    x = rescale(inputs)
+    x = base(x, training=False)
+    x = pooling_layers[0](x)
+    x = dropout_layers[0](x, training=False)
+    outputs = classifier(x)
+    inference_model = tf.keras.Model(
+        inputs, outputs, name="freshora_inference")
+
+    return inference_model
+
+
 def main():
     if not KERAS_PATH.is_file():
         fail("freshora_model.keras not found. Train first: "
@@ -62,6 +101,8 @@ def main():
 
     print("Loading the laptop model...")
     model = tf.keras.models.load_model(str(KERAS_PATH))
+    print("Preparing the phone model without training-only augmentation...")
+    inference_model = make_inference_model(model, tf)
 
     print("Converting to phone format (this takes a minute)...")
     export_dir = HERE / "_export_tmp"
@@ -69,11 +110,11 @@ def main():
         shutil.rmtree(export_dir)
 
     try:
-        model.export(str(export_dir))
+        inference_model.export(str(export_dir))
         converter = tf.lite.TFLiteConverter.from_saved_model(str(export_dir))
     except Exception as error:
         print("(first route failed, trying the second:", error, ")")
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter = tf.lite.TFLiteConverter.from_keras_model(inference_model)
 
     # Makes the file about 4x smaller with almost no change in answers.
     converter.optimizations = [tf.lite.Optimize.DEFAULT]

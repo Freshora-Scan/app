@@ -28,6 +28,10 @@ android.minapi = 24
 android.archs = arm64-v8a
 android.permissions = CAMERA
 android.accept_sdk_license = True
+# Older, matching versions: the camera and TFLite libraries were made for
+# Python 3.11 era builds. Newer p4a builds Python 3.14 and they break.
+p4a.branch = v2024.01.21
+android.ndk = 25b
 # Sets up the camera library (the folder is cloned by the build, see
 # .github/workflows/build-apk.yml or BUILD_NOTES.md).
 p4a.hook = camerax_provider/gradle_options.py

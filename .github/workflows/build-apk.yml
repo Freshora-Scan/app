@@ -47,7 +47,7 @@ jobs:
           test -f model/labels.txt -o -f model/class_names.txt || { echo "model/labels.txt (or class_names.txt) is missing."; exit 1; }
 
       - name: Install the build tool
-        run: pip install --upgrade buildozer "cython==0.29.34" setuptools
+        run: pip install "buildozer==1.5.0" "cython==0.29.34" setuptools
 
       - name: Get the camera helper
         run: |
@@ -60,8 +60,7 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: buildozer-${{ hashFiles('buildozer.spec') }}
-          restore-keys: buildozer-
+          key: buildozer-py311-${{ hashFiles('buildozer.spec') }}
 
       - name: Build the APK
         run: buildozer -v android debug

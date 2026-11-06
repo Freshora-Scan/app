@@ -99,6 +99,17 @@ def main():
 
     import tensorflow as tf
 
+    # The Android app packages LiteRT Interpreter 1.4.2. Pin the converter
+    # family so a future desktop TensorFlow upgrade cannot silently create
+    # a model that requires newer operators than the APK runtime provides.
+    if not tf.__version__.startswith("2.20."):
+        fail(
+            "Freshora's pinned exporter requires TensorFlow 2.20.x, but this "
+            f"export is running TensorFlow {tf.__version__}.\n"
+            "Install the pinned development dependencies from "
+            "requirements.txt, then export again."
+        )
+
     print("Loading the laptop model...")
     model = tf.keras.models.load_model(str(KERAS_PATH))
     print("Preparing the phone model without training-only augmentation...")
@@ -116,7 +127,13 @@ def main():
         print("(first route failed, trying the second:", error, ")")
         converter = tf.lite.TFLiteConverter.from_keras_model(inference_model)
 
-    # Makes the file about 4x smaller with almost no change in answers.
+    # Keep the exported graph inside the standard builtin operator set.
+    # The Android APK uses LiteRT Interpreter 1.4.2, which supports this TFLite model format.
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+    converter.allow_custom_ops = False
+
+    # Dynamic-range weight quantization makes the model smaller while keeping
+    # float32 image input and float32 class scores.
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     tflite_bytes = converter.convert()
     TFLITE_PATH.write_bytes(tflite_bytes)
@@ -136,6 +153,13 @@ def main():
     out = interpreter.get_output_details()[0]
     print("Phone model input :", inp["shape"], inp["dtype"].__name__)
     print("Phone model output:", out["shape"])
+
+    if tuple(int(x) for x in inp["shape"]) != (1, 224, 224, 3):
+        fail("Android model input must be [1, 224, 224, 3].")
+    if np.dtype(inp["dtype"]) != np.float32:
+        fail("Android model input must be float32 RGB pixels.")
+    if np.dtype(out["dtype"]) != np.float32:
+        fail("Android model output must be float32 class scores.")
 
     names = [l.strip() for l in open(CLASS_NAMES_PATH, encoding="utf-8")
              if l.strip()]
@@ -167,7 +191,11 @@ def main():
     if same == len(images) and worst < 0.05:
         print("GOOD. The phone model matches the laptop model.")
     else:
-        print("Some answers differ. Send me this whole screen.")
+        fail(
+            "The exported phone model differs from the laptop model on the "
+            "test images. Do not publish this APK until the mismatch is "
+            "investigated."
+        )
 
 
 if __name__ == "__main__":

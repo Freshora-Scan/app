@@ -824,9 +824,10 @@ class FreshoraApp(App):
             Window.size = (400, 780)      # phone-shaped window on a laptop
             Window.minimum_width, Window.minimum_height = 360, 600
 
-        self.predictor = FreshoraPredictor()
+        self.predictor = FreshoraPredictor(android=ANDROID)
         self.store = Store(self.user_data_dir)
         self.model_error = ""
+        self.model_loading = True
         self.busy = False
         self.current_entry = None
         self.saved = False
@@ -862,6 +863,10 @@ class FreshoraApp(App):
     def on_stop(self):
         if ANDROID and hasattr(self, "camera_screen"):
             self.camera_screen._disconnect()
+        try:
+            self.predictor.close()
+        except Exception:
+            pass
 
     def on_pause(self):
         if ANDROID and self.sm.current == "camera":
@@ -955,23 +960,33 @@ class FreshoraApp(App):
     # Model loading (background)
     # --------------------------------------------------------
     def _load_model(self):
+        """Load the already-trained model once; never train on the phone."""
         try:
             self.predictor.load()
         except FreshoraError as error:
-            message = str(error)
-        except Exception as error:   # never let a thread die silently
-            message = repr(error)
-        else:
-            Clock.schedule_once(lambda dt: self.home.set_ready(True))
+            self.model_error = str(error)
+            self.model_loading = False
+            Clock.schedule_once(lambda dt: self._show_model_load_error())
             return
-        self.model_error = message
-        Clock.schedule_once(lambda dt: self.home.set_ready(
-            False, "AI model is missing. Camera and photo picker are available; "
-                   "scanning needs the phone model."))
-        # Buttons stay usable so the user can read the real reason.
-        Clock.schedule_once(lambda dt: self._enable_for_error())
+        except Exception as error:   # never let a thread die silently
+            self.model_error = repr(error)
+            self.model_loading = False
+            Clock.schedule_once(lambda dt: self._show_model_load_error())
+            return
 
-    def _enable_for_error(self):
+        self.model_error = ""
+        self.model_loading = False
+        Clock.schedule_once(lambda dt: self.home.set_ready(
+            True, "AI model loaded. Ready to scan."))
+
+    def _show_model_load_error(self):
+        """Keep the guarded buttons usable so they can show the real error."""
+        self.home.set_ready(
+            False, "AI model unavailable. Tap Open camera or Add photo "
+                   "to see the loading error."
+        )
+        # These actions remain safe: open_camera/open_gallery call
+        # _model_unavailable() and never begin a scan when the model failed.
         self.home.scan_button.disabled = False
         self.home.gallery_button.disabled = False
 
@@ -999,12 +1014,16 @@ class FreshoraApp(App):
             callback(False)
 
     def open_camera(self):
+        if self._model_unavailable():
+            return
         if ANDROID:
             self.go("camera")
         else:
             self._desktop_picker()
 
     def open_gallery(self):
+        if self._model_unavailable():
+            return
         if not ANDROID:
             self._desktop_picker()
             return
@@ -1088,10 +1107,19 @@ class FreshoraApp(App):
         popup.open()
 
     def _model_unavailable(self):
-        if self.model_error:
-            self.show_message("AI model not available", self.model_error)
-            return True
-        return False
+        if self.predictor.loaded:
+            return False
+        if self.model_loading:
+            self.show_message(
+                "AI model loading",
+                "Freshora is loading its pre-trained model. Try again in a moment."
+            )
+        else:
+            self.show_message(
+                "AI model not available",
+                self.model_error or "The packaged AI model could not be loaded."
+            )
+        return True
 
     # --------------------------------------------------------
     # Scanning (background thread)
@@ -1099,8 +1127,7 @@ class FreshoraApp(App):
     def start_scan(self, path):
         if self.busy:
             return
-        if self.model_error:
-            self.show_message("AI model not available", self.model_error)
+        if self._model_unavailable():
             return
         if isinstance(path, (list, tuple)):
             self.scan_queue = [str(item) for item in path if item]

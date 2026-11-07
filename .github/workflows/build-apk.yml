@@ -1,4 +1,3 @@
-
 # Build Freshora's Android APK on GitHub Actions.
 
 name: Build Android APK
@@ -43,7 +42,7 @@ jobs:
       - name: Verify system dependencies
         run: |
           ant -version
-          cython --version
+          cython3 --version
           /usr/bin/python3 -c "import Cython; print('System Cython:', Cython.__version__)"
           test -x /usr/bin/ant
 
@@ -161,4 +160,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: bin/*.apk
-          

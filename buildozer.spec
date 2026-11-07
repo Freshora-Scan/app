@@ -41,6 +41,8 @@ p4a.branch = v2024.01.21
 android.ndk = 25b
 p4a.hook = camerax_provider/gradle_options.py
 
+android.ant_path = /usr
+
 [buildozer]
 log_level = 2
 warn_on_root = 1

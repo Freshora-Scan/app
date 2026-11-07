@@ -8,15 +8,10 @@
 # Also imported by main.py (the app), so everything lives in
 # the FreshoraPredictor class and nothing runs on import.
 #
-# WHAT CHANGED IN THIS VERSION
-#   A phone cannot run full TensorFlow. So the predictor now prefers
-#   the small phone model (freshora_model.tflite, made by
-#   export_tflite.py) and runs it with whichever TFLite runtime is
-#   installed:
-#       phone:   tflite_runtime
-#       laptop:  tensorflow (it contains the same thing)
-#   If there is no .tflite file yet, the laptop falls back to the
-#   old freshora_model.keras so nothing breaks before you export.
+# ANDROID RUNTIME
+#   Android uses the bundled LiteRT Interpreter 1.4.2 Java runtime through
+#   PyJNIus. Desktop keeps using a Python TFLite/TensorFlow interpreter.
+#   The phone only loads the exported .tflite file; training stays offline.
 #
 # The model's classes are "<food>__<state>" (apple__ripe ...).
 # We answer two questions separately:
@@ -138,10 +133,12 @@ def _resize_filter():
 
 class FreshoraPredictor:
 
-    def __init__(self):
+    def __init__(self, android=False):
         self.class_names = []
-        self.backend = None          # "tflite" or "keras" once loaded
+        self.android = bool(android)
+        self.backend = None          # android_tflite, tflite, or keras
         self._interpreter = None
+        self._android_interpreter = None
         self._input_index = None
         self._output_index = None
         self._keras_model = None
@@ -162,25 +159,85 @@ class FreshoraPredictor:
 
             names = read_class_names()
 
-            interpreter_class = _find_tflite_interpreter()
-            if TFLITE_PATH.is_file() and interpreter_class is not None:
-                self._load_tflite(interpreter_class, names)
-            elif KERAS_PATH.is_file():
-                self._load_keras(names)
-            elif TFLITE_PATH.is_file():
-                raise FreshoraError(
-                    "The phone model exists but no TFLite runtime is "
-                    "installed.\nOn the laptop run:  pip install tensorflow\n"
-                    "On the phone the build needs 'tflite-runtime' in "
-                    "buildozer.spec."
-                )
+            if self.android:
+                # Use the Android-native TensorFlow Lite AAR, not the old
+                # python-for-android tflite-runtime recipe. The submitted
+                # model uses FULLY_CONNECTED v12, supported by TFLite 2.16.1+.
+                if not TFLITE_PATH.is_file():
+                    raise FreshoraError(
+                        "The Android model is missing: freshora_model.tflite.\n"
+                        "Put it in the model/ folder and rebuild the APK."
+                    )
+                self._load_android_tflite(names)
             else:
-                raise FreshoraError(
-                    "No trained model was found.\n"
-                    "Train it:   py -3.12 model/train.py\n"
-                    "Then export: py -3.12 model/export_tflite.py"
-                )
+                interpreter_class = _find_tflite_interpreter()
+                if TFLITE_PATH.is_file() and interpreter_class is not None:
+                    self._load_tflite(interpreter_class, names)
+                elif KERAS_PATH.is_file():
+                    self._load_keras(names)
+                elif TFLITE_PATH.is_file():
+                    raise FreshoraError(
+                        "The phone model exists but no TFLite runtime is "
+                        "installed.\nOn the laptop run:  pip install tensorflow."
+                    )
+                else:
+                    raise FreshoraError(
+                        "No trained model was found.\n"
+                        "Train it:   py -3.12 model/train.py\n"
+                        "Then export: py -3.12 model/export_tflite.py"
+                    )
             self.class_names = names
+
+    def _load_android_tflite(self, names):
+        """Load the model through the bundled LiteRT Java runtime."""
+        interpreter = None
+        try:
+            from jnius import autoclass
+
+            NativeInterpreter = autoclass("org.freshora.ai.FreshoraTFLite")
+            interpreter = NativeInterpreter(str(TFLITE_PATH))
+            input_bytes = int(interpreter.getInputByteCount())
+            outputs = int(interpreter.getOutputSize())
+        except Exception as error:
+            if interpreter is not None:
+                try:
+                    interpreter.close()
+                except Exception:
+                    pass
+            raise FreshoraError(
+                "Freshora's Android LiteRT Interpreter 1.4.2 runtime could not "
+                "load the model.\n"
+                "The APK must include android_src/ and the Gradle dependency "
+                "com.google.ai.edge.litert:litert:1.4.2.\n"
+                f"Details: {error}"
+            )
+
+        expected_input_bytes = 1 * IMG_SIZE[0] * IMG_SIZE[1] * 3 * 4
+        if input_bytes != expected_input_bytes:
+            try:
+                interpreter.close()
+            except Exception:
+                pass
+            raise FreshoraError(
+                "The Android model has an unexpected input tensor.\n"
+                f"Expected {expected_input_bytes} bytes for a 224x224 RGB "
+                f"float32 image; the model reports {input_bytes}."
+            )
+
+        if outputs != len(names):
+            try:
+                interpreter.close()
+            except Exception:
+                pass
+            raise FreshoraError(
+                f"The Android model has {outputs} outputs but the class list "
+                f"has {len(names)} names.\n"
+                "The model and class_names.txt must come from the same "
+                "training run."
+            )
+
+        self._android_interpreter = interpreter
+        self.backend = "android_tflite"
 
     def _load_tflite(self, interpreter_class, names):
         try:
@@ -267,6 +324,28 @@ class FreshoraPredictor:
     # --------------------------------------------------------
     def _run(self, batch):
         with self._lock:
+            if self.backend == "android_tflite":
+                try:
+                    # Send the contiguous float32 tensor as bytes. This avoids
+                    # converting 150k pixels into a large Python list/JNI array.
+                    raw_input = bytearray(
+                        np.ascontiguousarray(batch, dtype=np.float32).tobytes()
+                    )
+                    raw_output = self._android_interpreter.runBytes(raw_input)
+                    probabilities = np.asarray(list(raw_output), dtype=np.float32)
+                except Exception as error:
+                    raise FreshoraError(
+                        "Android LiteRT could not analyse this photo.\n"
+                        f"Details: {error}"
+                    )
+                if probabilities.size != len(self.class_names):
+                    raise FreshoraError(
+                        "The Android model returned an unexpected number of "
+                        "scores. Check that the APK contains the matching "
+                        "model and class_names.txt."
+                    )
+                return probabilities
+
             if self.backend == "tflite":
                 self._interpreter.set_tensor(self._input_index, batch)
                 self._interpreter.invoke()
@@ -274,6 +353,18 @@ class FreshoraPredictor:
                     self._interpreter.get_tensor(self._output_index)[0]
                 )
             return self._keras_model.predict(batch, verbose=0)[0]
+
+    def close(self):
+        """Release native model memory when the app is closing."""
+        with self._lock:
+            if self._android_interpreter is not None:
+                try:
+                    self._android_interpreter.close()
+                finally:
+                    self._android_interpreter = None
+            self._interpreter = None
+            self._keras_model = None
+            self.backend = None
 
     # --------------------------------------------------------
     # Turn raw probabilities into food + state
@@ -429,28 +520,26 @@ def main():
         print("\nERROR:", error)
         sys.exit(1)
 
-    print("\n===================================")
+    print("\n==========================================")
     print("FRESHORA RESULT")
-    print("===================================")
-    print(f"Food:   {p.food_name or '?'}  ({p.food_confidence * 100:.1f}% sure)")
-    print(f"State:  {p.state}  ({p.state_confidence * 100:.1f}% of "
-          f"this food's states)")
+    print("==========================================")
+    print(f"Food:  {p.food_name or '?'} ({p.food_confidence * 100:.1f}% sure)")
+    print(f"State: {p.state} ({p.state_confidence * 100:.1f}% of this food's states)")
 
     print("\nTop guesses:")
     top = sorted(p.scores.items(), key=lambda item: item[1], reverse=True)[:5]
     for name, score in top:
         print(f"  {name:30s}: {score * 100:5.1f}%")
 
-    print("\n" + reply.full())
+    print("\n" + str(reply.full()))
 
     if args.debug:
         print(f"\n[voice source: {reply.source}] {reply.note}")
 
-    print("\n-----------------------------------")
+    print("\n------------------------------------------")
     print("Freshora can be wrong. It only sees the outside of the food.")
     print("Never rely on the AI alone to decide if food is safe to eat.")
-    print("-----------------------------------\n")
-
+    print("------------------------------------------\n")
 
 if __name__ == "__main__":
     main()

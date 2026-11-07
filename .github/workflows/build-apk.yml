@@ -1,6 +1,5 @@
 
 # Build Freshora's Android APK on GitHub Actions.
-# Validate the existing TFLite model, then build the APK.
 
 name: Build Android APK
 
@@ -39,11 +38,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ant git zip unzip autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
-            libffi-dev libssl-dev automake
+            libffi-dev libssl-dev automake cython3 python3-dev
 
-      - name: Verify Apache Ant
+      - name: Verify system dependencies
         run: |
           ant -version
+          cython --version
+          /usr/bin/python3 -c "import Cython; print('System Cython:', Cython.__version__)"
           test -x /usr/bin/ant
 
       - name: Install the matching model validation runtime
@@ -51,7 +52,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "numpy==1.26.4" "tensorflow==2.20.0"
 
-      - name: Validate the exact model and labels that will enter the APK
+      - name: Validate the exact model and labels
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -80,11 +81,11 @@ jobs:
               raise SystemExit(f"Unexpected input shape: {inp['shape']}")
 
           if inp["dtype"] != np.float32 or out["dtype"] != np.float32:
-              raise SystemExit("Freshora expects float32 input and output")
+              raise SystemExit("Expected float32 input and output")
 
           if int(out["shape"][-1]) != len(labels):
               raise SystemExit(
-                  f"Output/label mismatch: {out['shape']} vs {len(labels)} labels"
+                  f"Output/label mismatch: {out['shape']} vs {len(labels)}"
               )
 
           if len(labels) != len(set(labels)):
@@ -99,7 +100,7 @@ jobs:
           scores = interpreter.get_tensor(out["index"])
 
           if scores.shape != (1, len(labels)) or not np.isfinite(scores).all():
-              raise SystemExit("Model smoke test returned invalid scores")
+              raise SystemExit("Invalid model output")
 
           labels_path = Path("model/labels.txt")
 
@@ -109,20 +110,18 @@ jobs:
                   for x in labels_path.read_text(encoding="utf-8").splitlines()
                   if x.strip()
               ]
-
               if copied != labels:
-                  raise SystemExit("labels.txt is not identical to class_names.txt")
+                  raise SystemExit("labels.txt mismatch")
 
           print(
               f"PASS: TensorFlow {tf.__version__}; "
               f"{len(labels)} labels; "
               f"input={inp['shape']}; "
-              f"output={out['shape']}; "
-              f"model={model.stat().st_size:,} bytes"
+              f"output={out['shape']}"
           )
           PY
 
-      - name: Install the Android build tools
+      - name: Install Android build tools
         run: |
           python -m pip install "buildozer==1.5.0" "cython==0.29.34" setuptools
 
@@ -157,7 +156,7 @@ jobs:
             bin/*.apk
             model/freshora_model.tflite
 
-      - name: Attach APK to a GitHub Release (tags only)
+      - name: Attach APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:

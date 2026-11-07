@@ -1,7 +1,6 @@
+
 # Build Freshora's Android APK on GitHub Actions.
-# CI validates the already-exported .tflite model with TensorFlow 2.20.0,
-# then builds the APK with the LiteRT 1.4.2 Android Interpreter runtime.
-# No training or model conversion is performed during an APK build.
+# Validate the existing TFLite model, then build the APK.
 
 name: Build Android APK
 
@@ -30,7 +29,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -38,9 +37,14 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf libtool pkg-config \
+          sudo apt-get install -y ant git zip unzip autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
             libffi-dev libssl-dev automake
+
+      - name: Verify Apache Ant
+        run: |
+          ant -version
+          test -x /usr/bin/ant
 
       - name: Install the matching model validation runtime
         run: |
@@ -56,37 +60,66 @@ jobs:
 
           model = Path("model/freshora_model.tflite")
           labels_file = Path("model/class_names.txt")
+
           if not model.is_file() or model.stat().st_size < 100_000:
               raise SystemExit("TFLite model is missing or unexpectedly small")
 
-          labels = [x.strip() for x in labels_file.read_text(encoding="utf-8").splitlines() if x.strip()]
+          labels = [
+              x.strip()
+              for x in labels_file.read_text(encoding="utf-8").splitlines()
+              if x.strip()
+          ]
+
           interpreter = tf.lite.Interpreter(model_path=str(model))
           interpreter.allocate_tensors()
+
           inp = interpreter.get_input_details()[0]
           out = interpreter.get_output_details()[0]
 
           if tuple(int(x) for x in inp["shape"]) != (1, 224, 224, 3):
               raise SystemExit(f"Unexpected input shape: {inp['shape']}")
+
           if inp["dtype"] != np.float32 or out["dtype"] != np.float32:
               raise SystemExit("Freshora expects float32 input and output")
+
           if int(out["shape"][-1]) != len(labels):
-              raise SystemExit(f"Output/label mismatch: {out['shape']} vs {len(labels)} labels")
+              raise SystemExit(
+                  f"Output/label mismatch: {out['shape']} vs {len(labels)} labels"
+              )
+
           if len(labels) != len(set(labels)):
               raise SystemExit("Duplicate labels found")
 
-          # Real invoke, not only allocation: catch broken tensor graphs now.
-          interpreter.set_tensor(inp["index"], np.zeros((1, 224, 224, 3), dtype=np.float32))
+          interpreter.set_tensor(
+              inp["index"],
+              np.zeros((1, 224, 224, 3), dtype=np.float32)
+          )
           interpreter.invoke()
+
           scores = interpreter.get_tensor(out["index"])
+
           if scores.shape != (1, len(labels)) or not np.isfinite(scores).all():
               raise SystemExit("Model smoke test returned invalid scores")
 
           labels_path = Path("model/labels.txt")
+
           if labels_path.exists():
-              copied = [x.strip() for x in labels_path.read_text(encoding="utf-8").splitlines() if x.strip()]
+              copied = [
+                  x.strip()
+                  for x in labels_path.read_text(encoding="utf-8").splitlines()
+                  if x.strip()
+              ]
+
               if copied != labels:
                   raise SystemExit("labels.txt is not identical to class_names.txt")
-          print(f"PASS: TensorFlow {tf.__version__}; {len(labels)} labels; input={inp['shape']}; output={out['shape']}; model={model.stat().st_size:,} bytes")
+
+          print(
+              f"PASS: TensorFlow {tf.__version__}; "
+              f"{len(labels)} labels; "
+              f"input={inp['shape']}; "
+              f"output={out['shape']}; "
+              f"model={model.stat().st_size:,} bytes"
+          )
           PY
 
       - name: Install the Android build tools
@@ -129,3 +162,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: bin/*.apk
+          

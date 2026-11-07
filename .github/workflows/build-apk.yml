@@ -142,15 +142,38 @@ jobs:
             .buildozer
           key: freshora-buildozer-py311-${{ hashFiles('buildozer.spec') }}
 
+      - name: Verify LiteRT Java bridge configuration
+        run: |
+          test -f android_src/org/freshora/ai/FreshoraTFLite.java
+          grep -F 'android.add_src = android_src' buildozer.spec
+          grep -F 'com.google.ai.edge.litert:litert:1.4.2' buildozer.spec
+          grep -F 'org.freshora.ai.FreshoraTFLite' model/predict.py
+          echo "LiteRT Java bridge source and configuration are present."
+
       - name: Build the APK
         run: buildozer -v android debug
 
-      - name: Verify APK was packaged
+      - name: Verify APK and LiteRT Java bridge
         run: |
-          test -n "$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
           APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
           echo "Built: $APK"
-          unzip -l "$APK" | grep -E 'classes.dex|lib/armeabi-v7a/|lib/arm64-v8a/' | head -30
+          unzip -l "$APK" | grep -E 'classes[0-9]*.dex|lib/armeabi-v7a/|lib/arm64-v8a/' | head -30
+
+          FOUND=false
+          while IFS= read -r DEX; do
+            if unzip -p "$APK" "$DEX" | strings | grep -Fq 'FreshoraTFLite'; then
+              FOUND=true
+              break
+            fi
+          done < <(unzip -Z1 "$APK" | grep -E '^classes([0-9]+)?\.dex$' || true)
+
+          if [ "$FOUND" != true ]; then
+            echo "ERROR: FreshoraTFLite Java class is missing from the APK."
+            exit 1
+          fi
+
+          echo "PASS: FreshoraTFLite is compiled into the APK."
 
       - name: Upload APK and exported model
         uses: actions/upload-artifact@v4
@@ -165,3 +188,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: bin/*.apk
+          

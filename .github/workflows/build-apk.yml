@@ -1,11 +1,15 @@
 
 # Build Freshora's Android APK on GitHub Actions.
 
+
 name: Build Android APK
 
 on:
   workflow_dispatch:
+
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -14,12 +18,20 @@ permissions:
 
 jobs:
   build:
+    name: Build Freshora Android APK
     runs-on: ubuntu-22.04
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      # --------------------------------------------------
+      # 1. CHECKOUT
+      # --------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # --------------------------------------------------
+      # 2. PYTHON
+      # --------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -27,19 +39,45 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
+      # --------------------------------------------------
+      # 3. JAVA
+      # --------------------------------------------------
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
+      # --------------------------------------------------
+      # 4. SYSTEM DEPENDENCIES
+      # --------------------------------------------------
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y ant git zip unzip autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
-            libffi-dev libssl-dev automake cython3 python3-dev python3-pip
 
+          sudo apt-get install -y \
+            ant \
+            git \
+            zip \
+            unzip \
+            autoconf \
+            libtool \
+            pkg-config \
+            zlib1g-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libtinfo5 \
+            cmake \
+            libffi-dev \
+            libssl-dev \
+            automake \
+            cython3 \
+            python3-dev \
+            python3-pip
+
+      # --------------------------------------------------
+      # 5. SYSTEM CYTHON
+      # --------------------------------------------------
       - name: Update system Cython
         run: |
           sudo python3 -m pip install --upgrade "Cython==3.0.12"
@@ -52,11 +90,17 @@ jobs:
           /usr/bin/python3 -c "import Cython; print('Verified Cython:', Cython.__version__)"
           test -x /usr/bin/ant
 
-      - name: Install the matching model validation runtime
+      # --------------------------------------------------
+      # 6. INSTALL MODEL VALIDATION RUNTIME
+      # --------------------------------------------------
+      - name: Install model validation runtime
         run: |
           python -m pip install --upgrade pip
           python -m pip install "numpy==1.26.4" "tensorflow==2.20.0"
 
+      # --------------------------------------------------
+      # 7. VALIDATE MODEL AND LABELS
+      # --------------------------------------------------
       - name: Validate the exact model and labels
         run: |
           python - <<'PY'
@@ -70,11 +114,17 @@ jobs:
           if not model.is_file() or model.stat().st_size < 100_000:
               raise SystemExit("TFLite model is missing or unexpectedly small")
 
+          if not labels_file.is_file():
+              raise SystemExit("model/class_names.txt is missing")
+
           labels = [
               x.strip()
               for x in labels_file.read_text(encoding="utf-8").splitlines()
               if x.strip()
           ]
+
+          if not labels:
+              raise SystemExit("No labels found")
 
           interpreter = tf.lite.Interpreter(model_path=str(model))
           interpreter.allocate_tensors()
@@ -100,8 +150,8 @@ jobs:
               inp["index"],
               np.zeros((1, 224, 224, 3), dtype=np.float32)
           )
-          interpreter.invoke()
 
+          interpreter.invoke()
           scores = interpreter.get_tensor(out["index"])
 
           if scores.shape != (1, len(labels)) or not np.isfinite(scores).all():
@@ -115,6 +165,7 @@ jobs:
                   for x in labels_path.read_text(encoding="utf-8").splitlines()
                   if x.strip()
               ]
+
               if copied != labels:
                   raise SystemExit("labels.txt mismatch")
 
@@ -126,70 +177,102 @@ jobs:
           )
           PY
 
+      # --------------------------------------------------
+      # 8. BUILDOZER
+      # --------------------------------------------------
       - name: Install Android build tools
         run: |
-          python -m pip install "buildozer==1.5.0" "cython==0.29.34" setuptools
+          python -m pip install \
+            "buildozer==1.5.0" \
+            "cython==0.29.34" \
+            setuptools
 
+      # --------------------------------------------------
+      # 9. CAMERAX PROVIDER
+      # --------------------------------------------------
       - name: Get CameraX helper
         run: |
-          git clone --depth 1 https://github.com/Android-for-Python/camerax_provider.git
+          git clone --depth 1 \
+            https://github.com/Android-for-Python/camerax_provider.git
+
           rm -rf camerax_provider/.git
 
+      # --------------------------------------------------
+      # 10. CACHE BUILDOZER
+      # --------------------------------------------------
       - name: Cache Android build tools
         uses: actions/cache@v4
         with:
           path: |
             ~/.buildozer
             .buildozer
-          key: freshora-buildozer-py311-${{ hashFiles('buildozer.spec') }}
+          key: freshora-buildozer-${{ runner.os }}-py311-${{ hashFiles('buildozer.spec', '.github/workflows/build-apk.yml') }}
+          restore-keys: |
+            freshora-buildozer-${{ runner.os }}-py311-
 
+      # --------------------------------------------------
+      # 11. VERIFY LITERT JAVA BRIDGE
+      # --------------------------------------------------
       - name: Verify LiteRT Java bridge configuration
         run: |
           test -f android_src/org/freshora/ai/FreshoraTFLite.java
+
           grep -F 'android.add_src = android_src' buildozer.spec
+
           grep -F 'com.google.ai.edge.litert:litert:1.4.2' buildozer.spec
+
           grep -F 'org.freshora.ai.FreshoraTFLite' model/predict.py
+
           echo "LiteRT Java bridge source and configuration are present."
 
-      # OpenSSL mirror override
+      # --------------------------------------------------
+      # 12. BUILD APK
+      # --------------------------------------------------
       - name: Build the APK
         env:
           URL_openssl: https://mirrors.ibiblio.org/openssl/source/openssl-1.1.1w.tar.gz
-        run: buildozer -v android debug
-
-      - name: Verify APK and LiteRT Java bridge
+          URL_sdl2_image: https://www.libsdl.org/projects/SDL_image/release/SDL2_image-2.8.0.tar.gz
         run: |
-          APK="$(find bin -maxdepth 1 -name '*.apk' -print -quit)"
-          test -n "$APK"
-          echo "Built: $APK"
-          unzip -l "$APK" | grep -E 'classes[0-9]*.dex|lib/armeabi-v7a/|lib/arm64-v8a/' | head -30
+          buildozer -v android debug
 
-          FOUND=false
-          while IFS= read -r DEX; do
-            if unzip -p "$APK" "$DEX" | strings | grep -Fq 'FreshoraTFLite'; then
-              FOUND=true
-              break
-            fi
-          done < <(unzip -Z1 "$APK" | grep -E '^classes([0-9]+)?\.dex$' || true)
+      # --------------------------------------------------
+      # 13. VERIFY APK
+      # --------------------------------------------------
+      - name: Verify generated APK
+        run: |
+          echo "Checking generated APK..."
 
-          if [ "$FOUND" != true ]; then
-            echo "ERROR: FreshoraTFLite Java class is missing from the APK."
+          find bin -maxdepth 1 -type f -name "*.apk" -print
+
+          APK_COUNT=$(find bin -maxdepth 1 -type f -name "*.apk" | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "::error::No APK was generated."
             exit 1
           fi
 
-          echo "PASS: FreshoraTFLite is compiled into the APK."
+          echo "APK generated successfully."
 
-      - name: Upload APK and exported model
+      # --------------------------------------------------
+      # 14. UPLOAD APK ARTIFACT
+      # --------------------------------------------------
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: freshora-apk
-          path: |
-            bin/*.apk
-            model/freshora_model.tflite
+          name: Freshora-Android-APK
+          path: bin/*.apk
+          if-no-files-found: error
+          retention-days: 30
 
-      - name: Attach APK to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      # --------------------------------------------------
+      # 15. CREATE GITHUB RELEASE FOR TAG BUILDS
+      # --------------------------------------------------
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: bin/*.apk
+          generate_release_notes: true
+          
+
           

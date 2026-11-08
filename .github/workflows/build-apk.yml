@@ -1,3 +1,4 @@
+
 # Build Freshora's Android APK on GitHub Actions.
 
 name: Build Android APK
@@ -150,7 +151,10 @@ jobs:
           grep -F 'org.freshora.ai.FreshoraTFLite' model/predict.py
           echo "LiteRT Java bridge source and configuration are present."
 
+      # OpenSSL mirror override
       - name: Build the APK
+        env:
+          URL_openssl: https://mirrors.ibiblio.org/openssl/source/openssl-1.1.1w.tar.gz
         run: buildozer -v android debug
 
       - name: Verify APK and LiteRT Java bridge

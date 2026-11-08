@@ -1,0 +1,466 @@
+name: Build Freshora Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: freshora-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Freshora Android APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    env:
+      CI: "true"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_INPUT: "1"
+      SEGMENT_DOWNLOAD_TIMEOUT_MINS: "10"
+
+    steps:
+      # --------------------------------------------------
+      # 1. CHECKOUT
+      # --------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # --------------------------------------------------
+      # 2. HOST PYTHON
+      # --------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # --------------------------------------------------
+      # 3. JAVA
+      # --------------------------------------------------
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Verify base toolchain
+        run: |
+          set -euxo pipefail
+          python --version
+          python -m pip --version
+          java -version
+          javac -version
+          git --version
+
+      # --------------------------------------------------
+      # 4. SYSTEM BUILD DEPENDENCIES
+      # --------------------------------------------------
+      - name: Install system packages
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get -o Acquire::Retries=3 update
+
+          sudo apt-get \
+            -o Acquire::Retries=3 \
+            install \
+            --no-install-recommends \
+            -y \
+            ant \
+            autoconf \
+            automake \
+            build-essential \
+            ccache \
+            cmake \
+            cython3 \
+            gettext \
+            git \
+            libbz2-dev \
+            libexpat1-dev \
+            libffi-dev \
+            libgdbm-compat-dev \
+            libgdbm-dev \
+            liblzma-dev \
+            libltdl-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libreadline-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            libtinfo5 \
+            libtool \
+            make \
+            pkg-config \
+            python3-dev \
+            python3-pip \
+            uuid-dev \
+            unzip \
+            zip \
+            zlib1g-dev
+
+          ant -version
+          cmake --version
+          ccache --version
+          gcc --version
+
+      # --------------------------------------------------
+      # 5. CRITICAL FIX:
+      #    P4A RUNS CYTHONIZATION WITH SYSTEM PYTHON.
+      #    THE PREVIOUS RUN USED OLD UBUNTU CYTHON HERE,
+      #    NOT THE CYTHON INSTALLED IN setup-python.
+      # --------------------------------------------------
+      - name: Install compatible system Cython for PyJNIus
+        run: |
+          set -euxo pipefail
+
+          # python-for-android invokes the system "python3"
+          # while Cythonizing PyJNIus. Install Cython 3 into
+          # that interpreter, not only the Actions Python.
+          sudo python3 -m pip install \
+            --upgrade \
+            --ignore-installed \
+            "Cython==3.0.12"
+
+          # Verify the exact interpreter and import path used
+          # by the Cythonization subprocess.
+          /usr/bin/python3 - <<'PY'
+          import Cython
+          import sys
+
+          print("System Python:", sys.executable)
+          print("System Cython:", Cython.__version__)
+          print("Cython module:", Cython.__file__)
+
+          if Cython.__version__ != "3.0.12":
+              raise SystemExit(
+                  "Wrong system Cython version. Expected 3.0.12."
+              )
+          PY
+
+          /usr/bin/cython3 --version
+
+      # --------------------------------------------------
+      # 6. BUILDOZER / ACTIONS PYTHON TOOLING
+      # --------------------------------------------------
+      - name: Install Android build tools
+        run: |
+          set -euxo pipefail
+
+          python -m pip install --upgrade pip
+
+          python -m pip install \
+            "setuptools==79.0.1" \
+            wheel \
+            "buildozer==1.5.0" \
+            "Cython==3.0.12"
+
+          python -m pip check
+          buildozer --version
+          cython --version
+
+      # --------------------------------------------------
+      # 7. REPOSITORY PREFLIGHT
+      # --------------------------------------------------
+      - name: Validate application source
+        run: |
+          set -euxo pipefail
+
+          test -s buildozer.spec
+          test -s main.py
+          test -s model/predict.py
+          test -s model/freshora_model.tflite
+          test -s model/class_names.txt
+
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          ignored = {
+              ".git",
+              ".buildozer",
+              "bin",
+              "venv",
+              ".venv",
+              "__pycache__",
+              "camerax_provider",
+          }
+
+          files = [
+              path
+              for path in Path(".").rglob("*.py")
+              if not any(part in ignored for part in path.parts)
+          ]
+
+          if not files:
+              raise SystemExit("No Python files found.")
+
+          failures = []
+          for path in sorted(files):
+              try:
+                  ast.parse(
+                      path.read_text(encoding="utf-8-sig"),
+                      filename=str(path),
+                  )
+              except (SyntaxError, UnicodeDecodeError) as exc:
+                  failures.append(f"{path}: {exc}")
+
+          if failures:
+              print("\n".join(failures))
+              raise SystemExit("Python syntax validation failed.")
+
+          print(f"Syntax validation passed for {len(files)} files.")
+          PY
+
+      # --------------------------------------------------
+      # 8. MODEL VALIDATION
+      # --------------------------------------------------
+      - name: Validate TFLite model
+        run: |
+          set -euxo pipefail
+
+          python -m pip install \
+            "numpy==1.26.4" \
+            "tensorflow==2.20.0"
+
+          python -m pip check
+
+          python - <<'PY'
+          from pathlib import Path
+          import numpy as np
+          import tensorflow as tf
+
+          model_path = Path("model/freshora_model.tflite")
+          labels_path = Path("model/class_names.txt")
+
+          if not model_path.is_file() or model_path.stat().st_size < 100_000:
+              raise SystemExit("TFLite model missing or unexpectedly small.")
+
+          if not labels_path.is_file():
+              raise SystemExit("model/class_names.txt missing.")
+
+          labels = [
+              line.strip()
+              for line in labels_path.read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+
+          if not labels:
+              raise SystemExit("No class labels found.")
+
+          if len(labels) != len(set(labels)):
+              raise SystemExit("Duplicate class labels found.")
+
+          interpreter = tf.lite.Interpreter(model_path=str(model_path))
+          interpreter.allocate_tensors()
+
+          inputs = interpreter.get_input_details()
+          outputs = interpreter.get_output_details()
+
+          if len(inputs) != 1 or len(outputs) != 1:
+              raise SystemExit("Expected exactly one model input and output.")
+
+          inp = inputs[0]
+          out = outputs[0]
+
+          expected_shape = (1, 224, 224, 3)
+          input_shape = tuple(int(x) for x in inp["shape"])
+          output_shape = tuple(int(x) for x in out["shape"])
+
+          if input_shape != expected_shape:
+              raise SystemExit(f"Wrong model input shape: {input_shape}")
+
+          if inp["dtype"] != np.float32 or out["dtype"] != np.float32:
+              raise SystemExit("Model input/output must be float32.")
+
+          if output_shape != (1, len(labels)):
+              raise SystemExit(
+                  f"Model output/labels mismatch: {output_shape}, {len(labels)}"
+              )
+
+          interpreter.set_tensor(
+              inp["index"],
+              np.zeros(expected_shape, dtype=np.float32),
+          )
+          interpreter.invoke()
+
+          result = interpreter.get_tensor(out["index"])
+
+          if result.shape != (1, len(labels)):
+              raise SystemExit("Unexpected inference result shape.")
+
+          if not np.isfinite(result).all():
+              raise SystemExit("Model inference returned NaN or infinity.")
+
+          print(
+              f"MODEL OK: TensorFlow={tf.__version__}, "
+              f"classes={len(labels)}, input={input_shape}, "
+              f"output={output_shape}"
+          )
+          PY
+
+      # --------------------------------------------------
+      # 9. CAMERAX HELPER
+      # --------------------------------------------------
+      - name: Get CameraX helper
+        run: |
+          set -euxo pipefail
+
+          rm -rf camerax_provider
+
+          git clone \
+            --depth 1 \
+            https://github.com/Android-for-Python/camerax_provider.git \
+            camerax_provider
+
+          test -s camerax_provider/gradle_options.py
+          rm -rf camerax_provider/.git
+
+      # --------------------------------------------------
+      # 10. LITERT JAVA BRIDGE PREFLIGHT
+      # --------------------------------------------------
+      - name: Verify LiteRT Java bridge
+        run: |
+          set -euxo pipefail
+
+          test -s android_src/org/freshora/ai/FreshoraTFLite.java
+
+          grep -F \
+            'android.add_src = android_src' \
+            buildozer.spec
+
+          grep -F \
+            'com.google.ai.edge.litert:litert:1.4.2' \
+            buildozer.spec
+
+          grep -F \
+            'org.freshora.ai.FreshoraTFLite' \
+            model/predict.py
+
+          test -s camerax_provider/gradle_options.py
+
+          echo "LiteRT and CameraX checks passed."
+
+      # --------------------------------------------------
+      # 11. BUILD CACHE
+      # --------------------------------------------------
+      - name: Cache Android build files
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: freshora-android-${{ runner.os }}-py311-${{ hashFiles('buildozer.spec', 'main.py', '*.py', 'model/**/*.py', 'android_src/**/*.java', '*.kv') }}
+          restore-keys: |
+            freshora-android-${{ runner.os }}-py311-
+
+      # --------------------------------------------------
+      # 12. ANDROID BUILD
+      # --------------------------------------------------
+      - name: Build APK
+        env:
+          # PyJNIus 1.6.1 supports Cython 3. This flag is
+          # specifically recognized by the PyJNIus Android build.
+          ANDROID_PYJNUS_CYTHON_3: "1"
+
+          # Confirmed working download mirrors from earlier runs.
+          URL_openssl: https://mirrors.ibiblio.org/openssl/source/openssl-1.1.1w.tar.gz
+          URL_sdl2_image: https://www.libsdl.org/projects/SDL_image/release/SDL2_image-2.8.0.tar.gz
+          URL_sdl2_mixer: https://www.libsdl.org/projects/SDL_mixer/release/SDL2_mixer-2.6.3.tar.gz
+          URL_sdl2_ttf: https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.20.2.tar.gz
+
+        run: |
+          set -o pipefail
+
+          echo "System Cython used by p4a:"
+          /usr/bin/python3 -c \
+            "import Cython; print(Cython.__version__, Cython.__file__)"
+
+          echo "PyJNIus Cython 3 mode:"
+          test "$ANDROID_PYJNUS_CYTHON_3" = "1"
+
+          buildozer -v android debug 2>&1 | tee buildozer.log
+
+      # --------------------------------------------------
+      # 13. VERIFY APK OUTPUT
+      # --------------------------------------------------
+      - name: Verify generated APK
+        if: success()
+        run: |
+          set -euxo pipefail
+
+          test -d bin
+
+          mapfile -t APKS < <(
+            find bin -maxdepth 1 -type f -name "*.apk" -print | sort
+          )
+
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "::error::No APK generated."
+            exit 1
+          fi
+
+          APKSIGNER="$(
+            find "$HOME/.buildozer/android/platform/android-sdk/build-tools" \
+              -type f -name apksigner -print -quit 2>/dev/null || true
+          )"
+
+          for apk in "${APKS[@]}"; do
+            test -s "$apk"
+            file "$apk"
+            sha256sum "$apk"
+
+            if [ -n "$APKSIGNER" ]; then
+              "$APKSIGNER" verify --verbose "$apk"
+            else
+              echo "::warning::apksigner unavailable; signature check skipped."
+            fi
+          done
+
+      # --------------------------------------------------
+      # 14. ALWAYS KEEP THE FULL BUILD LOG
+      # --------------------------------------------------
+      - name: Upload Buildozer diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Freshora-Build-Log
+          path: buildozer.log
+          if-no-files-found: ignore
+          retention-days: 14
+          compression-level: 6
+
+      # --------------------------------------------------
+      # 15. APK ARTIFACT
+      # --------------------------------------------------
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Freshora-Android-APK
+          path: bin/*.apk
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      # --------------------------------------------------
+      # 16. TAG RELEASE
+      # --------------------------------------------------
+      - name: Publish GitHub Release
+        if: success() && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: bin/*.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true

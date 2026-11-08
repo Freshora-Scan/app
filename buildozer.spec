@@ -7,7 +7,7 @@ package.domain = org.freshora
 version = 0.1.0
 orientation = portrait
 fullscreen = 0
-# icon.filename = %(source.dir)s/assets/icon.png
+icon.filename = %(source.dir)s/assets/icon.png
 # presplash.filename = %(source.dir)s/assets/presplash.png
 
 # ---- what goes INTO the app

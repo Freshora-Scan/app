@@ -1,3 +1,5 @@
+#This thing builds the apk (android app) file.
+
 name: Build Freshora Android APK
 
 on:

@@ -10,10 +10,10 @@ import random
 from datetime import datetime
 
 TITLES = {
-    "morning": ["Good morning,", "Morning, sunshine,", "Rise and ripen,"],
-    "afternoon": ["Good afternoon,", "Hello, midday human,", "Afternoon,"],
-    "evening": ["Good evening,", "Evening, kitchen explorer,", "Welcome back,"],
-    "night": ["Late-night snacker,", "Still awake?", "Midnight fridge visit?"],
+    "morning": ["Good morning", "Morning, sunshine", "Rise and ripen"],
+    "afternoon": ["Good afternoon", "Hello, midday human", "Afternoon"],
+    "evening": ["Good evening", "Evening, kitchen explorer", "Welcome back"],
+    "night": ["Late-night snacker", "Still awake?", "Midnight fridge visit?"],
 }
 
 WEIRD = [

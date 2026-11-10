@@ -973,7 +973,7 @@ class SettingsScreen(Screen):
                          size_hint_y=None, height=dp(76), padding=dp(10),
                          spacing=dp(8))
         self.name_label = wrap_label(
-            text="", font_size=sp(15), color=rgba(theme.FOREST))
+            text="", font_size=sp(19), color=rgba(theme.FOREST))
         name_card.add_widget(self.name_label)
         pencil = make_image(
             source=str(ROOT / "assets" / "pencil.png"),

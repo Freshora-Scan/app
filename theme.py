@@ -39,6 +39,7 @@ THEME_NAMES = (
     "Modern",
     "I like red",
     "Pinkpink",
+    "Desi Yellow",
     "Custom",
 )
 
@@ -71,13 +72,13 @@ PALETTES = {
         "MUTED": "56717D",
     },
     "Forest": {
-        "FOREST": "174B32",
-        "DEEP": "082719",
-        "CREAM": "EDF5E9",
-        "MINT": "A8E6A0",
-        "LEAF": "4C9658",
-        "PAPER": "FBFFF9",
-        "MUTED": "607B65",
+        "FOREST": "39E390",
+        "DEEP": "55E339",
+        "CREAM": "064F02",
+        "MINT": "7B82BD",
+        "LEAF": "AAFAAA",
+        "PAPER": "8CA18C",
+        "MUTED": "F1F4F1",
     },
     "Modern": {
         "FOREST": "3C424A",
@@ -105,6 +106,15 @@ PALETTES = {
         "LEAF": "DB5A91",
         "PAPER": "FFFBFD",
         "MUTED": "90677C",
+    },
+    "Desi Yellow": {
+        "FOREST": "BF4700",
+        "DEEP": "FFBF00",
+        "CREAM": "FFAC59",
+        "MINT": "FFEE2E",
+        "LEAF": "049F04",
+        "PAPER": "FDB9F6",
+        "MUTED": "4F4602",
     },
 }
 

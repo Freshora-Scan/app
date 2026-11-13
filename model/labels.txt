@@ -1,3 +1,7 @@
+apple__overripe
+apple__ripe
+apple__rotten
+apple__unripe
 avocado__overripe
 avocado__ripe
 avocado__rotten
@@ -6,21 +10,70 @@ banana__overripe
 banana__ripe
 banana__rotten
 banana__unripe
+beetroot__overripe
+beetroot__ripe
+beetroot__rotten
+beetroot__unripe
+bitter gourd__overripe
+bitter gourd__ripe
+bitter gourd__rotten
+bitter gourd__unripe
+cabbage__overripe
+cabbage__ripe
+cabbage__rotten
+cabbage__unripe
+carrot__overripe
+carrot__ripe
+carrot__rotten
+carrot__unripe
+cauliflower__overripe
+cauliflower__ripe
+cauliflower__rotten
+cauliflower__unripe
 garlic__overripe
 garlic__ripe
 garlic__rotten
 garlic__unripe
+ginger__overripe
+ginger__ripe
+ginger__rotten
+ginger__unripe
 grapes__overripe
 grapes__ripe
+grapes__rotten
 grapes__unripe
 green chilli__overripe
 green chilli__ripe
 green chilli__rotten
 green chilli__unripe
+mango__overripe
+mango__ripe
+mango__rotten
+mango__unripe
+okra__overripe
+okra__ripe
+okra__rotten
+okra__unripe
+onion__overripe
+onion__ripe
+onion__rotten
+onion__unripe
+papaya__overripe
+papaya__ripe
+papaya__rotten
+papaya__unripe
 peach__overripe
 peach__ripe
 peach__rotten
 peach__unripe
+pointed gourd__overripe
+pointed gourd__ripe
+pointed gourd__rotten
+pointed gourd__unripe
+pomegranate__overripe
+pomegranate__ripe
+pomegranate__rotten
+pomegranate__unripe
 potato__overripe
 potato__ripe
 strawberry__overripe

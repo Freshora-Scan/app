@@ -111,8 +111,8 @@ def entry_is_reliable(entry):
     try:
         return (
             bool(entry.get("reliable", True))
-            and float(entry.get("food_conf", 0.0)) >= 0.80
-            and float(entry.get("state_conf", 0.0)) >= 0.80
+            and float(entry.get("food_conf", 0.0)) >= 0.70
+            and float(entry.get("state_conf", 0.0)) >= 0.70
         )
     except (TypeError, ValueError):
         return False
@@ -850,7 +850,7 @@ class ScanFailedScreen(Screen):
         root.add_widget(self.food_confidence)
         root.add_widget(self.freshness_confidence)
         root.add_widget(wrap_label(
-            text=("Both confidence scores must be at least 80%, and the model "
+            text=("Both confidence scores must be at least 70%, and the model "
                   "must be able to assess freshness reliably. Try again with "
                   "one fruit or vegetable clearly visible, good lighting, and "
                   "no other food in the frame. Confidence is not a food-safety guarantee."),

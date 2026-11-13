@@ -50,8 +50,8 @@ CLASS_NAME_FILES = [HERE / "class_names.txt", HERE / "labels.txt"]
 IMG_SIZE = (224, 224)
 
 # Below these the scan is reported as "not sure" instead of guessing.
-MIN_FOOD_CONFIDENCE = 0.80     # Freshora only reports food IDs at 80%+
-MIN_STATE_CONFIDENCE = 0.80    # and only reports freshness at 80%+
+MIN_FOOD_CONFIDENCE = 0.70     # Freshora only reports food IDs at 80%+
+MIN_STATE_CONFIDENCE = 0.70    # and only reports freshness at 80%+
                                # among the states of that food
 
 # Safety brake: if the model gives this much of a food's probability

@@ -46,6 +46,8 @@ The AI can only analyse what it sees in the picture. It cannot detect bacteria, 
 
 Because of this, you should not use Freshora as the only reason to decide whether you should eat something.
 
+(Hey, AI is very sloppy to be honest, it calls an apple a rotten sweet potato, so remember, don't trust AI ;) )
+
 ---
 
 🌱 That's it!

@@ -1,4 +1,17 @@
+<p align="center">
+  <img src="assets/freshora-logo.png" width="180">
+</p>
 
+## 📱 App Preview
+
+<p align="center">
+  <img src="assets/home.png" width="30%">
+  <img src="assets/scan.png" width="30%">
+  <img src="assets/result.png" width="30%">
+</p>
+
+
+![Freshora Home Screen](assets/home.png)
 
 
 

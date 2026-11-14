@@ -1,5 +1,17 @@
+<p align="center">
+  <img src="assets/IMG-20261110-WA0002.jpg" width="180">
+</p>
 
+## 📱 App Preview
 
+### 🏠 Home Screen
+![Home Screen](assets/EXACT_HOME_IMAGE_NAME.jpg)
+
+### 📸 Scan Screen
+![Scan Screen](assets/EXACT_SCAN_IMAGE_NAME.jpg)
+
+### 📊 Result Screen
+![Result Screen](assets/EXACT_RESULT_IMAGE_NAME.jpg)
 
 
 

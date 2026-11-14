@@ -58,6 +58,10 @@ onion__overripe
 onion__ripe
 onion__rotten
 onion__unripe
+orange__overripe
+orange__ripe
+orange__rotten
+orange__unripe
 papaya__overripe
 papaya__ripe
 papaya__rotten

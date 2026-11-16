@@ -9,6 +9,22 @@ Your AI Food Scanner
 
 Freshora helps you scan food using your phone camera. It uses AI to give you a quick analysis of what is in the picture.
 
+(I literally had to add this so, Ima rewrite the introduction :P)
+
+About Freshora 🍎
+
+Freshora is a completely unnecessary yet surprisingly functional project built by students, because apparently having free time and access to Python wasn't enough.
+
+It uses AI to scan fruits and vegetables and classify their freshness. Is it revolutionary? Probably not. Is it useful? Sometimes. Is it occasionally going to call a perfectly innocent tomato rotten? Absolutely.
+
+Built out of curiosity, a little coding, questionable amounts of debugging, and the classic student mindset of "Hey, what if we actually made this?"
+
+Freshora isn't here to replace your grocery shopping instincts. It's just here to give your fruits a second opinion — even if that opinion is occasionally questionable.
+
+A student project. An AI experiment. A fruit judge nobody asked for.
+
+And remember: Don't trust AI. Especially when it's judging your mangoes.
+
 ---
 
 📱 How to use Freshora
